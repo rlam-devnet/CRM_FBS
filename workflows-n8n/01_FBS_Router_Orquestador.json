@@ -54,10 +54,10 @@
     },
     {
       "parameters": {
-        "jsCode": "const snapshot = $input.first().json;\nconst lead = snapshot.lead;\nconst qual = snapshot.qualification || {};\nconst raw = qual.raw_answers || {};\nconst chatData = $('Normalizar Payload Telegram').first().json;\nconst userText = chatData.text || '';\nconst state = lead.current_state;\n\nconst isAgente1 = ['NEW_LEAD', 'QUALIFYING', 'WARM', 'PARTIAL'].includes(state);\n\nlet activeQuestion = 'P1';\nif (raw.P4) {\n  activeQuestion = 'P4';\n} else if (raw.P3_INVESTMENT) {\n  activeQuestion = 'P4';\n} else if (raw.P3_AUTHORITY) {\n  activeQuestion = 'P3_INVESTMENT';\n} else if (raw.P2) {\n  activeQuestion = 'P3_AUTHORITY';\n} else if (raw.P1) {\n  activeQuestion = 'P2';\n}\n\nconst service = qual.service_needed || 'tu proyecto de marca';\nconst calLink = `https://cal.com/fbs-studio/consulta-30min?lead_id=${lead.id}`;\nconst formLink = `https://fbs.studio/precall/${lead.id}`;\n\nlet agente2Reply = '';\nif (state === 'QUALIFIED') {\n  agente2Reply = `¡Hola! Soy parte del equipo de coordinación de FBS. Vi que conversaste con el equipo sobre ${service} y el encaje es excelente. Vamos a coordinar la videollamada estratégica de 30 min (sin costo): puedes elegir el día y hora que mejor te acomode en este link: ${calLink}`;\n} else if (state === 'CONSULTATION_PENDING') {\n  agente2Reply = `Tu cita ya está en agenda. Por favor completa este breve formulario de 5 minutos antes de la reunión para enfocar la llamada directamente en estrategia: ${formLink}`;\n} else {\n  agente2Reply = `Gracias por tu mensaje. El equipo ya tiene tu caso registrado y te contactaremos a la brevedad.`;\n}\n\nreturn [{\n  json: {\n    is_agente_1: isAgente1,\n    lead_id: lead.id,\n    chat_id: chatData.chat_id,\n    active_question: activeQuestion,\n    user_answer: userText,\n    agente2_reply: agente2Reply\n  }\n}];"
+        "jsCode": "const snapshot = $input.first().json;\nconst lead = snapshot.lead;\nconst qual = snapshot.qualification || {};\nconst raw = qual.raw_answers || {};\nconst chatData = $('Normalizar Payload Telegram').first().json;\nconst userText = chatData.text || '';\nconst state = lead.current_state;\n\nconst isAgente1 = ['NEW_LEAD', 'QUALIFYING', 'WARM', 'PARTIAL'].includes(state);\n\nlet activeQuestion = 'P1';\nif (raw.P4) {\n  activeQuestion = 'P4';\n} else if (raw.P3_INVESTMENT) {\n  activeQuestion = 'P4';\n} else if (raw.P3_AUTHORITY) {\n  activeQuestion = 'P3_INVESTMENT';\n} else if (raw.P2) {\n  activeQuestion = 'P3_AUTHORITY';\n} else if (raw.P1) {\n  activeQuestion = 'P2';\n}\n\n// Construir System Prompt blindado para Agente 1 (Gemini)\nconst systemPrompt = `Eres el asistente conversacional oficial de Fernández Briceño Studio (FBS), un estudio de diseño y branding estratégico en Chile.\nTu misión es guiar al prospecto en un proceso de calificación de 4 preguntas cortas (P1 a P4), de forma natural, humana y profesional.\n\nREGLAS INVIOLABLES DE ROL Y TONO:\n1. NUNCA te salgas del guion ni inventes servicios, precios ni metodologías fuera de lo estipulado.\n2. Mensajes SIEMPRE cortos: máximo 2 a 3 líneas por mensaje. Nadie escribe párrafos en mensajería.\n3. Empatía primero: haz una micro-reacción corta a lo que el prospecto acaba de decir antes de hacer la siguiente pregunta (ej: \"Ya, tiene sentido.\", \"Perfecto, eso ayuda a entender el panorama.\", \"Ok, anotado.\", \"Entiendo — pasa más de lo que crees.\"). ROTA siempre las frases, nunca repitas la misma dos veces.\n4. Cero lenguaje robótico: PROHIBIDO decir \"procesando\", \"gracias por responder\", \"consulta registrada\".\n5. Si el prospecto pregunta si eres un bot, responde honesto: \"Soy un asistente del equipo — te ayudo a agilizar esto antes de pasarte con una persona real.\"\n6. El piso de inversión oficial de FBS para proyectos de marca es $1.200.000 CLP.\n7. Si el prospecto desvía la conversación o pregunta precios antes de P3, responde en 1 línea corta y reencauza de inmediato hacia la pregunta pendiente.\n\nESTADO ACTUAL DEL PROSPECTO:\n- Nombre: ${lead.first_name || 'Prospecto'}\n- Estado CRM: ${state}\n- Pregunta a procesar o formular: ${activeQuestion}\n- Historial previo capturado: ${JSON.stringify(raw)}\n\nMENSAJE RECIBIDO DEL PROSPECTO:\n\"${userText}\"\n\nDebes responder OBLIGATORIAMENTE con un objeto JSON válido con este formato:\n{\n  \"parsed_answer\": \"Texto limpio que responde a ${activeQuestion} para almacenar en el CRM\",\n  \"bot_reply\": \"Tu mensaje conversacional exacto y humanizado para enviar al usuario en Telegram\"\n}`;\n\nconst service = qual.service_needed || 'tu proyecto de marca';\nconst calLink = `https://cal.com/fbs-studio/consulta-30min?lead_id=${lead.id}`;\nconst formLink = `https://fbs.studio/precall/${lead.id}`;\n\nlet agente2Reply = '';\nif (state === 'QUALIFIED') {\n  agente2Reply = `¡Hola! Soy parte del equipo de coordinación de FBS. Vi que conversaste con el equipo sobre ${service} y el encaje es excelente. Vamos a coordinar la videollamada estratégica de 30 min (sin costo): puedes elegir el día y hora que mejor te acomode en este link: ${calLink}`;\n} else if (state === 'CONSULTATION_PENDING') {\n  agente2Reply = `Tu cita ya está en agenda. Por favor completa este breve formulario de 5 minutos antes de la reunión para enfocar la llamada directamente en estrategia: ${formLink}`;\n} else {\n  agente2Reply = `Gracias por tu mensaje. El equipo ya tiene tu caso registrado y te contactaremos a la brevedad.`;\n}\n\nreturn [{\n  json: {\n    is_agente_1: isAgente1,\n    lead_id: lead.id,\n    chat_id: chatData.chat_id,\n    active_question: activeQuestion,\n    user_answer: userText,\n    system_prompt: systemPrompt,\n    agente2_reply: agente2Reply\n  }\n}];"
       },
       "id": "node-agent-router-code",
-      "name": "Preparar Enrutamiento",
+      "name": "Preparar Enrutamiento y Prompt",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [980, 300]
@@ -94,28 +94,67 @@
     },
     {
       "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "models/gemini-2.5-flash"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $json.system_prompt }}"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {}
+      },
+      "id": "node-gemini-a1",
+      "name": "Google Gemini - Agente 1",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [1440, 180],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "HGA4oBsMOuXPhO7N",
+          "name": "Google Gemini API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "let rawText = '';\nconst geminiOut = $input.first().json;\n\nif (geminiOut.content?.parts?.[0]?.text) {\n  rawText = geminiOut.content.parts[0].text;\n} else if (typeof geminiOut === 'string') {\n  rawText = geminiOut;\n} else if (geminiOut.bot_reply) {\n  return [{ json: geminiOut }];\n}\n\nlet parsed = {};\ntry {\n  const clean = rawText.replace(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/i, '$1').trim();\n  parsed = JSON.parse(clean);\n} catch (e) {\n  parsed = { parsed_answer: $('Preparar Enrutamiento y Prompt').first().json.user_answer, bot_reply: rawText };\n}\n\nconst routeData = $('Preparar Enrutamiento y Prompt').first().json;\n\nreturn [{\n  json: {\n    lead_id: routeData.lead_id,\n    chat_id: routeData.chat_id,\n    active_question: routeData.active_question,\n    parsed_answer: parsed.parsed_answer || routeData.user_answer,\n    bot_reply: parsed.bot_reply || rawText\n  }\n}];"
+      },
+      "id": "node-parse-gemini-output",
+      "name": "Procesar Salida de Gemini",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 180]
+    },
+    {
+      "parameters": {
         "method": "POST",
         "url": "=http://crm-api:3000/leads/{{ $json.lead_id }}/qualification/answer",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"question\": \"{{ $json.active_question }}\",\n  \"raw_answer\": \"{{ $json.user_answer }}\",\n  \"actor\": \"agente_1\"\n}",
+        "jsonBody": "={\n  \"question\": \"{{ $json.active_question }}\",\n  \"raw_answer\": \"{{ $json.parsed_answer }}\",\n  \"actor\": \"agente_1_ia\"\n}",
         "options": {}
       },
       "id": "node-agente-1-api",
-      "name": "Agente 1 - Enviar Respuesta API",
+      "name": "Actualizar Estado en CRM API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1460, 180]
+      "position": [1900, 180]
     },
     {
       "parameters": {
-        "jsCode": "const answerRes = $input.first().json;\nconst chatData = $('Normalizar Payload Telegram').first().json;\n\nreturn [{\n  json: {\n    chat_id: chatData.chat_id,\n    reply_text: answerRes.message_text,\n    lead_id: answerRes.lead_id\n  }\n}];"
+        "jsCode": "const geminiData = $('Procesar Salida de Gemini').first().json;\nconst apiData = $input.first().json;\n\n// El bot_reply de Gemini humaniza la interacción mientras que la API garantiza la lógica\nconst finalReply = geminiData.bot_reply || apiData.message_text;\n\nreturn [{\n  json: {\n    chat_id: geminiData.chat_id,\n    reply_text: finalReply,\n    lead_id: geminiData.lead_id\n  }\n}];"
       },
-      "id": "node-format-reply-a1",
-      "name": "Agente 1 - Formatear Salida",
+      "id": "node-merge-reply",
+      "name": "Preparar Mensaje Final Telegram",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1680, 180]
+      "position": [2120, 180]
     },
     {
       "parameters": {
@@ -125,7 +164,7 @@
       "name": "Agente 2 - Formatear Salida",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1460, 420]
+      "position": [1440, 420]
     },
     {
       "parameters": {
@@ -140,19 +179,20 @@
       "name": "Enviar Mensaje a Telegram",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1940, 300]
+      "position": [2360, 300],
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={\n  \"status\": \"ok\",\n  \"sent\": true\n}",
+        "responseBody": "={\n  \"status\": \"ok\",\n  \"reply\": \"{{ $('Preparar Mensaje Final Telegram').first()?.json?.reply_text || $('Agente 2 - Formatear Salida').first()?.json?.reply_text }}\"\n}",
         "options": {}
       },
       "id": "node-respond-webhook",
       "name": "Responder Webhook Telegram",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [2180, 300]
+      "position": [2580, 300]
     }
   ],
   "connections": {
@@ -193,14 +233,14 @@
       "main": [
         [
           {
-            "node": "Preparar Enrutamiento",
+            "node": "Preparar Enrutamiento y Prompt",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Preparar Enrutamiento": {
+    "Preparar Enrutamiento y Prompt": {
       "main": [
         [
           {
@@ -215,7 +255,7 @@
       "main": [
         [
           {
-            "node": "Agente 1 - Enviar Respuesta API",
+            "node": "Google Gemini - Agente 1",
             "type": "main",
             "index": 0
           }
@@ -229,18 +269,40 @@
         ]
       ]
     },
-    "Agente 1 - Enviar Respuesta API": {
+    "Google Gemini - Agente 1": {
       "main": [
         [
           {
-            "node": "Agente 1 - Formatear Salida",
+            "node": "Procesar Salida de Gemini",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Agente 1 - Formatear Salida": {
+    "Procesar Salida de Gemini": {
+      "main": [
+        [
+          {
+            "node": "Actualizar Estado en CRM API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Actualizar Estado en CRM API": {
+      "main": [
+        [
+          {
+            "node": "Preparar Mensaje Final Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Mensaje Final Telegram": {
       "main": [
         [
           {
