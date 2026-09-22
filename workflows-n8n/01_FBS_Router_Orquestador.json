@@ -129,15 +129,30 @@
     },
     {
       "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot8817198126:AAHreDqi1CWBBIYzZBMfir-VB7jUkxLUQ8s/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $json.chat_id }}\",\n  \"text\": \"{{ $json.reply_text }}\"\n}",
+        "options": {}
+      },
+      "id": "node-telegram-send",
+      "name": "Enviar Mensaje a Telegram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1940, 300]
+    },
+    {
+      "parameters": {
         "respondWith": "json",
-        "responseBody": "={\n  \"status\": \"ok\",\n  \"lead_id\": \"{{ $json.lead_id }}\",\n  \"reply\": \"{{ $json.reply_text }}\"\n}",
+        "responseBody": "={\n  \"status\": \"ok\",\n  \"sent\": true\n}",
         "options": {}
       },
       "id": "node-respond-webhook",
       "name": "Responder Webhook Telegram",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1940, 300]
+      "position": [2180, 300]
     }
   ],
   "connections": {
@@ -229,7 +244,7 @@
       "main": [
         [
           {
-            "node": "Responder Webhook Telegram",
+            "node": "Enviar Mensaje a Telegram",
             "type": "main",
             "index": 0
           }
@@ -237,6 +252,17 @@
       ]
     },
     "Agente 2 - Formatear Salida": {
+      "main": [
+        [
+          {
+            "node": "Enviar Mensaje a Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar Mensaje a Telegram": {
       "main": [
         [
           {
