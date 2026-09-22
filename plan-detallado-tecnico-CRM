@@ -1,0 +1,258 @@
+# FBS — Plan Detallado de Implementación Técnica del CRM
+
+### Technical Execution Plan / Especificación de Arquitectura Técnica
+
+Este documento es el que se entrega directamente al modelo de IA que va a construir el sistema. Es ejecutable: cada milestone se descompone en tareas atómicas con dependencias, entregable y criterio de aceptación verificable. Se apoya en `FBS_Arquitectura_CRM.md` (modelo de datos completo) — aquí se lleva ese modelo a un plan de construcción secuencial.
+
+---
+
+## 0. Resumen de arquitectura
+
+```
+WhatsApp Cloud API ─┐
+                     ├─→ n8n (orquestación de agentes) ─→ API del CRM ─→ PostgreSQL (Supabase)
+Telegram Bot API ───┘                                          ↑
+                                                        Dashboard humano (closer / owner)
+```
+
+- **El CRM no es solo la base de datos.** Es: (a) el esquema, (b) una capa de API que valida y expone operaciones de negocio (no CRUD libre), (c) un motor de estados que impide transiciones ilegales, (d) el event log inmutable, (e) la vista humana.
+- **Los agentes de conversación (n8n) son clientes de esa API**, nunca escriben directo a las tablas. Esto es lo que separa "lógica de negocio" de "lógica de conversación" y es la razón por la que el CRM se construye antes y de forma independiente al guion de WhatsApp.
+
+---
+
+## 1. Estructura del proyecto
+
+```
+fbs-crm/
+├── db/
+│   ├── migrations/           # migraciones versionadas (Supabase CLI o equivalente)
+│   ├── seeds/                # config_variables inicial, estados válidos, etc.
+│   └── policies/             # RLS por client_id/project_id
+├── api/
+│   ├── leads/                # endpoints o funciones: create, get, update-state
+│   ├── qualification/
+│   ├── precall-form/
+│   ├── consultations/
+│   ├── commercial-gate/
+│   ├── proposals-contracts/
+│   ├── onboarding-discovery-informe/
+│   └── shared/
+│       ├── state-machine.ts  # tabla de transiciones válidas + validador
+│       └── audit.ts          # helper de escritura a state_transitions
+├── workflows-n8n/             # export JSON de los workflows por agente (versión controlada)
+├── dashboard/                 # vista mínima para closer/owner
+├── tests/
+│   ├── unit/                  # scoring, gates, validador de transiciones
+│   ├── integration/           # endpoints de la API contra DB de prueba
+│   └── e2e/                   # lead simulado end-to-end sin WhatsApp real
+└── docs/
+    └── (este documento + FBS_Arquitectura_CRM.md como referencia viva)
+```
+
+## 2. Convenciones obligatorias
+
+- Ninguna migración destructiva sin respaldo verificado de `state_transitions`.
+- Ninguna transición de `current_state` fuera de la API (ni el dashboard ni n8n tocan la tabla `leads` directo — todo pasa por `PATCH /leads/{id}/state`).
+- Ningún valor de negocio (precio, piso de inversión, umbrales de score) vive en código o prompt — todo se lee de `config_variables` en tiempo de ejecución.
+- Toda tarea de este plan se cierra con su prueba correspondiente en `tests/`, no solo con el código funcionando manualmente.
+
+---
+
+## 3. Milestones y tareas
+
+### M0 — Fundación del CRM (bloqueante para todo lo demás)
+
+| ID | Tarea | Entregable | Criterio de aceptación |
+| --- | --- | --- | --- |
+| M0-1 | Crear las 12 tablas del modelo de datos (DDL de `FBS_Arquitectura_CRM.md` §4) | migración inicial | `\dt` muestra las 12 tablas; tipos enum correctos |
+| M0-2 | Tabla `state_transition_rules` (from_state, to_state, allowed bool) precargada con la máquina de estados de §3 de la arquitectura | migración + seed | consulta de `to_state` para cada `from_state` coincide 1:1 con el diagrama de estados |
+| M0-3 | Función/trigger que **rechaza** un `UPDATE current_state` si `(from,to)` no está en `state_transition_rules` | función SQL + test | intento de saltar de `NEW_LEAD` directo a `PROPOSAL_SENT` falla con error explícito |
+| M0-4 | Trigger de auditoría automática a `state_transitions` en cada cambio de estado válido | función SQL + test | cada transición válida deja exactamente 1 fila nueva en `state_transitions` con actor, timestamp y estado anterior/nuevo |
+| M0-5 | Tabla `config_variables` sembrada con las claves de §10 de v1.0 (`PISO_INVERSION` en `status=blocking`, resto en `pending`) | seed | query de `status=blocking` devuelve solo `PISO_INVERSION` hasta que el owner la active |
+| M0-6 | RLS por `client_id`/`project_id` en tablas postventa (`onboarding`, `discovery`, `informe_01`) | policies | un rol de prueba sin `client_id` asignado no puede leer filas de otro cliente |
+| M0-7 | Endpoint/función `GET /config/{key}` que bloquea la operación llamante si `status != active` para una clave marcada `blocking` en el flujo que la use | función + test | llamar a un flujo que dependa de `PISO_INVERSION` sin activarla devuelve `BLOCKED` con la clave faltante, no un valor inventado |
+
+**Definition of Done de M0:** se puede insertar un lead sintético, moverlo por estados válidos, ver el log completo en `state_transitions`, y confirmar que un salto inválido es rechazado — todo sin ningún agente de conversación conectado todavía.
+
+---
+
+### M1 — API de negocio sobre el CRM (Agente 1 y 2 consumen esto, no la DB directo)
+
+| ID | Tarea | Entregable | Criterio de aceptación |
+| --- | --- | --- | --- |
+| M1-1 | `POST /leads` — crea o reconoce lead existente por teléfono (dedupe) | endpoint | mismo teléfono dos veces → segunda llamada devuelve el `lead_id` existente con `dedupe_master_id` resuelto, no crea duplicado |
+| M1-2 | `PATCH /leads/{id}/entry-class` — Nodo 0 escribe la clasificación | endpoint | `entry_class != LEAD` fuerza `current_state = OUT_OF_SCOPE` o `SPAM` automáticamente |
+| M1-3 | `POST /leads/{id}/qualification/answer` — escribe una respuesta (P1-P4) de forma incremental | endpoint | responder P3 con `decision_authority=D` deja `gate_authority_pass=false` y `current_state=NURTURE` sin esperar P4 |
+| M1-4 | Lógica de scoring como función pura (`score_total`, `score_breakdown`) invocada al completar P4 | función + tests unitarios | tabla de casos de prueba con las combinaciones de la escala 0-8 de la arquitectura, todas correctas |
+| M1-5 | Evaluación de `hard_stop_flags` (texto libre de P2/P3 contra reglas configurables) | función + test | input con "copiar la marca de X" activa el flag correspondiente y fuerza `HUMAN_REVIEW` aunque el score sea 8 |
+| M1-6 | Job/endpoint de estado `PARTIAL` (6h sin respuesta) y reenganche único a 24h | cron + endpoint | simulación de tiempo: a las 6h pasa a `PARTIAL`; a las 24h sin respuesta manda 1 mensaje y pasa a `NURTURE`; un segundo intento de reenganche está bloqueado por diseño |
+| M1-7 | `POST /leads/{id}/precall-form` — recibe respuestas del formulario pre-llamada | endpoint | al completar, calcula `risk_signals` automáticos (estrategia no definida, Brand Book sin identidad, etc.) |
+| M1-8 | `POST /leads/{id}/consultation` — agenda y actualiza estado | endpoint | cita sin formulario completo al llegar la hora → `PRECALL_FORM_SKIPPED`, no bloquea la consulta |
+| M1-9 | STT: endpoint que recibe audio, llama al proveedor configurado, guarda transcripción marcada como `DECLARACIÓN`, actualiza `transcription_status` | endpoint + test | fallo simulado del proveedor → `transcription_status=fallo` + evento de handoff humano con referencia al audio, sin texto generado |
+
+**Definition of Done de M1:** un lead simulado puede recorrer P1→P4, gates, scoring, PARTIAL/reenganche, formulario pre-llamada y agenda, **solo llamando a la API**, sin ningún cliente de WhatsApp real.
+
+---
+
+### M2 — Integración de agentes de conversación (n8n)
+
+Todo mensaje entrante llega **al mismo webhook**, sin importar en qué punto del pipeline esté el lead. Por eso el primer nodo de n8n nunca es "Agente 1" ni "Agente 2" directamente — es un router que decide a quién le toca responder. Esto evita que ambos agentes procesen el mismo mensaje o que Agente 2 le hable a un lead que todavía no calificó.
+
+| ID | Tarea | Entregable | Criterio de aceptación |
+| --- | --- | --- | --- |
+| M2-0 | **Router de conversación**: workflow n8n que, para cada mensaje entrante, resuelve `lead_id` (por teléfono, vía M1-1) y consulta su `current_state` en la API, luego despacha al sub-workflow correspondiente: • `NEW_LEAD` (sin lead previo) → Nodo 0 (M2-1) • `QUALIFYING · WARM · PARTIAL` → Agente 1 (M2-2) • `QUALIFIED · CONSULTATION_PENDING · PRECALL_FORM_SENT` → Agente 2 (M2-4) • cualquier otro estado (`NURTURE`, `HUMAN_REVIEW`, post-venta) → no autoresponder, notificar al canal humano | workflow exportado (nodo "Switch" o similar) | mensaje de un lead en `QUALIFIED` nunca dispara las preguntas de Agente 1; mensaje de un lead en `QUALIFYING` nunca dispara la lógica de agenda |
+| M2-1 | Sub-workflow Nodo 0: normalización de payload + clasificación (`entry_class`) → llamada a M1-2 | workflow exportado | solo se ejecuta cuando el router determina que no hay lead previo; mensaje de prueba entrante crea el lead y lo clasifica correctamente |
+| M2-2 | Sub-workflow Agente 1: máquina de preguntas P1-P4 llamando a M1-3 en cada turno | workflow | conversación simulada de 4 turnos completa la calificación sin lógica de negocio duplicada en n8n (toda la lógica vive en la API); al llegar a `QUALIFIED`, el siguiente mensaje del mismo lead ya lo toma M2-4, no M2-2 |
+| M2-3 | Router + sub-workflows equivalentes para Telegram, reutilizando los mismos endpoints | workflow | mismo comportamiento, sin las restricciones de ventana de 24h aplicadas |
+| M2-4 | Sub-workflow Agente 2: agenda + formulario + recordatorios, llamando a M1-7/M1-8. Al tomar el lead, primero hace `GET /leads/{id}` para cargar todo lo que Agente 1 ya recogió (regla de reingreso — no repetir preguntas) | workflow | cita agendada dispara envío de formulario y programa los 2 recordatorios; el primer mensaje de Agente 2 referencia el servicio/problema ya conocido, no empieza de cero |
+| M2-5 | Manejo de ventana de 24h de WhatsApp: workflow verifica último mensaje del usuario antes de enviar fuera de plantilla | lógica en n8n | mensaje fuera de ventana sin plantilla aprobada se bloquea y usa plantilla configurada |
+
+**Definition of Done de M2:** un lead real (número de prueba de WhatsApp) puede calificarse de punta a punta y quedar agendado dentro de un mismo hilo de conversación, con el router despachando correctamente en cada turno y todo el estado visible en el CRM.
+
+---
+
+### M3 — Vista humana mínima (dashboard)
+
+| ID | Tarea | Entregable | Criterio de aceptación |
+| --- | --- | --- | --- |
+| M3-1 | Vista de lista filtrable por `current_state` | dashboard | closer ve todos los `QUALIFIED` pendientes de consulta |
+| M3-2 | Vista de detalle de lead: resumen de calificación + formulario pre-llamada + historial de `state_transitions` | dashboard | closer no necesita repetir preguntas ya respondidas (criterio de aceptación explícito del documento fuente) |
+| M3-3 | Acción manual de override de hard stop (con motivo obligatorio, queda en `state_transitions`) | dashboard + endpoint | override sin motivo es rechazado por la API |
+
+---
+
+### M4 — Gate comercial, propuestas y contratos (Fase 3)
+
+| ID | Tarea | Entregable | Criterio de aceptación |
+| --- | --- | --- | --- |
+| M4-1 | `POST /leads/{id}/commercial-gate` — las 5 condiciones, `gate_passed` calculado | endpoint | falla si falta cualquiera de las 5 condiciones, aunque el score haya sido alto |
+| M4-2 | `POST /leads/{id}/proposal` y transición a `PROPOSAL_SENT` | endpoint | `price_ref` apunta a `config_variables`, nunca un número literal |
+| M4-3 | `POST /leads/{id}/contract` → crea `client_id` y transición a `ACTIVATION_PENDING` | endpoint | a partir de aquí el `lead_id` queda congelado como histórico; el `client_id` es la nueva llave para postventa |
+
+---
+
+### M5-M7 — Onboarding, Discovery, Informe 01 (Fases 4-6)
+
+Mismo patrón: endpoint por etapa + validación de que no se activa sin `ACTIVATION_PENDING` confirmado + etiquetado obligatorio de evidencia (`HECHO/DECLARACIÓN/OBSERVACIÓN/HIPÓTESIS/DECISIÓN`) en `discovery.responses`. Se detalla en un documento aparte cuando M0-M4 estén en producción — construirlo antes sería anticipar trabajo sobre un flujo que todavía no tiene datos reales de calibración.
+
+---
+
+## 4. Estrategia de pruebas
+
+| Tipo | Qué cubre | Dónde |
+| --- | --- | --- |
+| Unitarias | scoring, gates, validador de transiciones de estado, detección de `risk_signals` | `tests/unit/` |
+| Integración | cada endpoint de M1/M4 contra una base de datos de prueba real | `tests/integration/` |
+| End-to-end | generador de leads sintéticos que recorre el pipeline completo llamando a la API (sin WhatsApp real) | `tests/e2e/` |
+| Contrato | payloads de WhatsApp Cloud API y Telegram Bot API validados contra un esquema fijo antes de entrar a n8n | `tests/integration/` |
+
+## 5. Orden de ejecución y dependencias
+
+```
+M0 (fundación) ──► M1 (API de negocio) ──► M2 (n8n / agentes) ──► M3 (dashboard)
+                                     └────► M4 (gate/propuesta/contrato) ──► M5-M7 (postventa)
+```
+
+M0 y M1 son estrictamente secuenciales y bloqueantes. M2 y M3 pueden avanzar en paralelo una vez M1 está estable. M4 no depende de M2/M3 técnicamente, pero **no tiene sentido de negocio construirlo** sin datos reales de M1-M2 corriendo primero (recomendación explícita del documento fuente: demostrar Lead→Calificado→Consulta antes de automatizar lo siguiente).
+
+## 6. Definition of Done global del proyecto (fase de lanzamiento)
+
+- Las 17 pruebas del checklist de aceptación consolidado (`FBS_Arquitectura_CRM.md` §9) pasan contra datos reales o simulados.
+- `PISO_INVERSION` activo en `config_variables`; el resto de variables de alta prioridad al menos en `pending` documentado, ninguna en blanco silencioso.
+- Un lead puede recorrer NEW_LEAD → QUALIFIED → CONSULTATION_PENDING → PRECALL_FORM_DONE sin que un humano toque la base de datos directamente.
+
+---
+
+## 7. Valores iniciales de `config_variables` (placeholder para poder construir ya)
+
+Estos valores desbloquean la construcción de M0-M4 sin esperar a que se cierren definiciones comerciales. Quedan en la tabla `config_variables` exactamente como cualquier otro valor — se editan ahí, nunca en código ni en prompts, y no requieren tocar el sistema para cambiarlos después.
+
+| Clave | Valor inicial propuesto | Estado sugerido | Nota |
+| --- | --- | --- | --- |
+| `PISO_INVERSION` | $1.200.000 CLP | `active` (placeholder) | Cifra de entrada conservadora para proyectos de identidad/rebranding pequeños en Chile. Es la única variable que el documento fuente marca como realmente bloqueante — que quede activa, aunque sea con este valor provisional, permite que el gate de inversión funcione desde el día 1 |
+| `consultation_mode` | `FREE` (30 min) | `active` | Estándar en funnels de agencia — la consulta gratuita es lo que baja la fricción de agendar; ajustar a `PAID` es un cambio de una fila, no de código |
+| `capacity_max` | 3 proyectos simultáneos | `active` | Valor conservador de arranque; el Gate Comercial lo usa para no vender por sobre capacidad real |
+| `stt_provider` | OpenAI Whisper API | `active` | Buen balance costo/precisión para español latino, fácil de reemplazar por estar detrás de una interfaz única (M1-9) |
+| `crm_platform` | Supabase (Postgres) | `active` | Ya definido en §2.1 |
+| `calendar_tool` | Cal.com | `active` | API abierta, página de reserva pública lista para el link de M1-8, buen soporte de webhooks en n8n. Alternativa: Google Calendar si ya usan Workspace |
+| `handoff_channel` | Slack `#leads-fbs` + número de WhatsApp interno (placeholder) | `pending` | Requiere que definan el canal real antes de producción — dejarlo en `pending` evita que el sistema notifique a un canal que nadie mira |
+| `followup_sla`, `noshow_policy`, `pricing_terms`, `investment_guide`, `consent_text`, `contract_template`, `message_texts` | — | `pending` | No bloquean M0-M4; sí bloquean M4 en producción real (propuesta/contrato) |
+
+**Regla que no cambia:** aunque estos valores ya estén cargados, el sistema los sigue tratando como configuración editable, no como constantes — cualquier cambio futuro es una fila de `config_variables`, nunca un deploy.
+
+---
+
+## 8. Contrato de API — ejemplos de request/response
+
+Autenticación: token de servicio (`Authorization: Bearer <token>`) por entorno (sandbox/staging/prod), distinto para n8n, dashboard y jobs internos — así un token comprometido se puede revocar sin tumbar todo el sistema.
+
+**`POST /leads`**
+
+```json
+// request
+{ "phone": "+56912345678", "channel": "whatsapp", "utm_source_ref": "IG" }
+// response 200 (nuevo o reconocido)
+{ "lead_id": "uuid", "current_state": "NEW_LEAD", "is_new": true, "dedupe_master_id": null }
+```
+
+**`POST /leads/{id}/qualification/answer`**
+
+```json
+// request
+{ "question": "P3", "raw_answer": "D", "answer_type": "text" }
+// response — la API decide, el agente no interpreta
+{
+  "next_action": "SEND_MESSAGE",
+  "message_key": "nurture_sin_decisor",
+  "current_state": "NURTURE",
+  "gate_authority_pass": false
+}
+```
+
+**`PATCH /leads/{id}/state`**
+
+```json
+// request
+{ "to_state": "QUALIFIED", "actor": "agente_1", "reason": "score=7, sin hard stops" }
+// response 409 si la transición no está en state_transition_rules
+{ "error": "INVALID_TRANSITION", "from": "NEW_LEAD", "to": "QUALIFIED" }
+```
+
+**`GET /leads/{id}`** — snapshot completo para Agente 2/closer: datos de `leads` + `qualification` + `precall_form_responses` + últimas 5 filas de `state_transitions`, en una sola llamada (evita que n8n tenga que encadenar 5 requests para armar el resumen de handoff).
+
+Códigos de error mínimos a estandarizar: `400` payload inválido, `403` token sin permiso para ese recurso, `404` lead no existe, `409` transición de estado inválida, `423` lead bloqueado (ver §9), `503` dependencia externa caída (con `retry_after`).
+
+---
+
+## 9. Confiabilidad de webhook (WhatsApp/Telegram reenvían mensajes duplicados o desordenados)
+
+| Problema | Solución técnica |
+| --- | --- |
+| Meta reenvía el mismo evento más de una vez | Tabla `webhook_events (message_id primary key, processed_at)` — si el `message_id` ya existe, se descarta silenciosamente antes de tocar cualquier lógica de negocio |
+| Verificación de origen | Validar `X-Hub-Signature-256` contra el app secret en cada request entrante; rechazar si no coincide |
+| Dos mensajes casi simultáneos del mismo lead (cliente escribe rápido, o reenganche + respuesta cruzan) | Lock corto por `lead_id` (advisory lock de Postgres o fila en `lead_locks` con TTL de pocos segundos) — el segundo mensaje espera a que el primero termine de procesarse antes de leer `current_state`, para que el router (M2-0) nunca decida con estado desactualizado |
+| Mensaje falla a mitad de procesamiento (por ejemplo, cae la API mientras se guardaba la respuesta) | Cola de reintento (`webhook_events.status = failed`) con reintento con backoff; si tras N intentos sigue fallando, pasa a `HUMAN_REVIEW` con el mensaje original adjunto, nunca se pierde silenciosamente |
+
+---
+
+## 10. Observabilidad y alertas
+
+El documento fuente exige fallback humano para "calendario caído", "CRM caído", "integración externa falla" — esto requiere que alguien se entere, no solo que el sistema no se caiga:
+
+- **Health checks** de cada integración externa (WhatsApp Cloud API, calendario, STT) corriendo cada pocos minutos; si una falla, notificación a `handoff_channel`.
+- **Logs estructurados** por `lead_id` en cada paso (clasificación, pregunta respondida, gate evaluado, transición de estado) — permite reconstruir la conversación completa de un lead para debug sin tener que leer WhatsApp.
+- **Alerta inmediata** (no diaria, no por email) cuando: un lead queda en `HUMAN_REVIEW`, falla una transcripción, o un webhook entra en la cola de reintento.
+- **Dashboard de métricas** (las de `FBS_Arquitectura_CRM.md` §6) con corte diario mínimo desde el primer lead real, para poder recalibrar los umbrales de score con los primeros 20-30 casos como pide el documento fuente.
+
+---
+
+## 11. Clasificación y manejo técnico de datos sensibles
+
+| Categoría | Qué incluye | Control técnico |
+| --- | --- | --- |
+| PÚBLICO | mensajes de apertura, textos de plantillas | sin restricción |
+| CLIENTE-OPERATIVO | respuestas de calificación, formulario, agenda | RLS por `lead_id`/`client_id`; visible para el agente asignado y el closer |
+| CLIENTE-RESTRINGIDO | audios originales, transcripciones, contenido de Discovery | acceso restringido a roles explícitos (closer del caso + admin), no a cualquier miembro del equipo con acceso al dashboard |
+| INTERNO DEL STUDIO | scoring interno, hard stop flags, notas del gate comercial | nunca expuesto al cliente ni a integraciones externas (ej. no debe viajar en el payload que arma la propuesta comercial) |
+
+Retención sugerida: audios originales 90 días tras la transcripción (después solo queda el texto, marcado como `DECLARACIÓN`); logs de auditoría (`state_transitions`) sin fecha de borrado, ya que son la base de la trazabilidad exigida por el documento fuente. `consent_status` se captura en el primer contacto y condiciona si el número puede recibir plantillas fuera de ventana de 24h.

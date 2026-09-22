@@ -1,0 +1,25 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+.mcp.json
+
+# Node & dependencies
+node_modules/
+dist/
+.cache/
+
+# Docker & local data
+data/
+postgres-data/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
