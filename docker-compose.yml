@@ -1,0 +1,53 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: fbs-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fbs_crm
+      POSTGRES_USER: fbs_admin
+      POSTGRES_PASSWORD: fbs_secret_password_2026
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fbs_admin -d fbs_crm"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+    networks:
+      - default
+
+  crm-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: fbs-crm-api
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      HOST: 0.0.0.0
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: fbs_admin
+      PGPASSWORD: fbs_secret_password_2026
+      PGDATABASE: fbs_crm
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - default
+
+volumes:
+  postgres_data:
+    name: fbs_postgres_data
+
+networks:
+  default:
+    name: n8n_default
+    external: true

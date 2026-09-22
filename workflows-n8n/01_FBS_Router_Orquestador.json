@@ -1,0 +1,251 @@
+{
+  "name": "FBS - Orquestador y Router Telegram",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "telegram-fbs",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-telegram",
+      "name": "Webhook Telegram Ingress",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 300],
+      "webhookId": "fbs-telegram-ingress"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst message = body.message || body.channel_post || {};\nconst from = message.from || {};\nconst chat = message.chat || {};\n\nif (!message.text && !message.voice) {\n  return [{ json: { ignore: true, reason: 'No text or voice message' } }];\n}\n\nreturn [{\n  json: {\n    ignore: false,\n    telegram_id: String(from.id || chat.id),\n    chat_id: String(chat.id),\n    first_name: from.first_name || '',\n    last_name: from.last_name || '',\n    username: from.username || '',\n    text: (message.text || '').trim(),\n    message_id: message.message_id,\n    date: message.date,\n    is_voice: !!message.voice\n  }\n}];"
+      },
+      "id": "node-normalizer",
+      "name": "Normalizar Payload Telegram",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://crm-api:3000/leads",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"telegram_id\": \"{{ $json.telegram_id }}\",\n  \"channel\": \"telegram\",\n  \"first_name\": \"{{ $json.first_name }}\",\n  \"last_name\": \"{{ $json.last_name }}\"\n}",
+        "options": {}
+      },
+      "id": "node-crm-dedupe",
+      "name": "Consultar/Crear Lead en CRM API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [540, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://crm-api:3000/leads/{{ $json.lead_id }}",
+        "options": {}
+      },
+      "id": "node-fetch-lead-details",
+      "name": "Obtener Snapshot Completo Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const snapshot = $input.first().json;\nconst lead = snapshot.lead;\nconst qual = snapshot.qualification || {};\nconst raw = qual.raw_answers || {};\nconst chatData = $('Normalizar Payload Telegram').first().json;\nconst userText = chatData.text || '';\nconst state = lead.current_state;\n\nconst isAgente1 = ['NEW_LEAD', 'QUALIFYING', 'WARM', 'PARTIAL'].includes(state);\n\nlet activeQuestion = 'P1';\nif (raw.P4) {\n  activeQuestion = 'P4';\n} else if (raw.P3_INVESTMENT) {\n  activeQuestion = 'P4';\n} else if (raw.P3_AUTHORITY) {\n  activeQuestion = 'P3_INVESTMENT';\n} else if (raw.P2) {\n  activeQuestion = 'P3_AUTHORITY';\n} else if (raw.P1) {\n  activeQuestion = 'P2';\n}\n\nconst service = qual.service_needed || 'tu proyecto de marca';\nconst calLink = `https://cal.com/fbs-studio/consulta-30min?lead_id=${lead.id}`;\nconst formLink = `https://fbs.studio/precall/${lead.id}`;\n\nlet agente2Reply = '';\nif (state === 'QUALIFIED') {\n  agente2Reply = `¡Hola! Soy parte del equipo de coordinación de FBS. Vi que conversaste con el equipo sobre ${service} y el encaje es excelente. Vamos a coordinar la videollamada estratégica de 30 min (sin costo): puedes elegir el día y hora que mejor te acomode en este link: ${calLink}`;\n} else if (state === 'CONSULTATION_PENDING') {\n  agente2Reply = `Tu cita ya está en agenda. Por favor completa este breve formulario de 5 minutos antes de la reunión para enfocar la llamada directamente en estrategia: ${formLink}`;\n} else {\n  agente2Reply = `Gracias por tu mensaje. El equipo ya tiene tu caso registrado y te contactaremos a la brevedad.`;\n}\n\nreturn [{\n  json: {\n    is_agente_1: isAgente1,\n    lead_id: lead.id,\n    chat_id: chatData.chat_id,\n    active_question: activeQuestion,\n    user_answer: userText,\n    agente2_reply: agente2Reply\n  }\n}];"
+      },
+      "id": "node-agent-router-code",
+      "name": "Preparar Enrutamiento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-is-a1",
+              "leftValue": "={{ $json.is_agente_1 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-agent-1",
+      "name": "¿Es Turno de Agente 1?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://crm-api:3000/leads/{{ $json.lead_id }}/qualification/answer",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"question\": \"{{ $json.active_question }}\",\n  \"raw_answer\": \"{{ $json.user_answer }}\",\n  \"actor\": \"agente_1\"\n}",
+        "options": {}
+      },
+      "id": "node-agente-1-api",
+      "name": "Agente 1 - Enviar Respuesta API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1460, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "const answerRes = $input.first().json;\nconst chatData = $('Normalizar Payload Telegram').first().json;\n\nreturn [{\n  json: {\n    chat_id: chatData.chat_id,\n    reply_text: answerRes.message_text,\n    lead_id: answerRes.lead_id\n  }\n}];"
+      },
+      "id": "node-format-reply-a1",
+      "name": "Agente 1 - Formatear Salida",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nreturn [{\n  json: {\n    chat_id: item.chat_id,\n    reply_text: item.agente2_reply,\n    lead_id: item.lead_id\n  }\n}];"
+      },
+      "id": "node-format-reply-a2",
+      "name": "Agente 2 - Formatear Salida",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1460, 420]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"ok\",\n  \"lead_id\": \"{{ $json.lead_id }}\",\n  \"reply\": \"{{ $json.reply_text }}\"\n}",
+        "options": {}
+      },
+      "id": "node-respond-webhook",
+      "name": "Responder Webhook Telegram",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1940, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Telegram Ingress": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Payload Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar Payload Telegram": {
+      "main": [
+        [
+          {
+            "node": "Consultar/Crear Lead en CRM API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar/Crear Lead en CRM API": {
+      "main": [
+        [
+          {
+            "node": "Obtener Snapshot Completo Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obtener Snapshot Completo Lead": {
+      "main": [
+        [
+          {
+            "node": "Preparar Enrutamiento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Enrutamiento": {
+      "main": [
+        [
+          {
+            "node": "¿Es Turno de Agente 1?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es Turno de Agente 1?": {
+      "main": [
+        [
+          {
+            "node": "Agente 1 - Enviar Respuesta API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Agente 2 - Formatear Salida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente 1 - Enviar Respuesta API": {
+      "main": [
+        [
+          {
+            "node": "Agente 1 - Formatear Salida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente 1 - Formatear Salida": {
+      "main": [
+        [
+          {
+            "node": "Responder Webhook Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente 2 - Formatear Salida": {
+      "main": [
+        [
+          {
+            "node": "Responder Webhook Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
