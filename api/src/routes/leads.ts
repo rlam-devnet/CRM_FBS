@@ -323,14 +323,28 @@ async function syncToTwentyCRM(leadId: string) {
     if (companyId) personPayload.companyId = companyId;
 
     let personId: string | null = null;
-    const personRes = await fetch(`${apiUrl}/rest/people`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(personPayload)
-    });
-    if (personRes.ok) {
-      const personData = (await personRes.json()) as { data?: { createPerson?: { id: string } } };
-      personId = personData.data?.createPerson?.id || null;
+    if (lead.email) {
+      const searchRes = await fetch(`${apiUrl}/rest/people?filter[emails.primaryEmail][eq]=${encodeURIComponent(lead.email)}`, {
+        headers: { 'Authorization': `Bearer ${apiKey}` }
+      });
+      if (searchRes.ok) {
+        const searchData = (await searchRes.json()) as { data?: { people?: Array<{ id: string }> } };
+        if (searchData.data?.people && searchData.data.people.length > 0) {
+          personId = searchData.data.people[0].id;
+        }
+      }
+    }
+
+    if (!personId) {
+      const personRes = await fetch(`${apiUrl}/rest/people`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(personPayload)
+      });
+      if (personRes.ok) {
+        const personData = (await personRes.json()) as { data?: { createPerson?: { id: string } } };
+        personId = personData.data?.createPerson?.id || null;
+      }
     }
     let oppId: string | null = null;
     const oppName = `Branding - ${lead.company_name || lead.first_name || 'Nuevo Prospecto'}`;
@@ -355,6 +369,67 @@ async function syncToTwentyCRM(leadId: string) {
       'UPDATE leads SET twenty_person_id = $1, twenty_opportunity_id = $2 WHERE id = $3',
       [personId, oppId, leadId]
     );
+    // 4. Crear Nota Ejecutiva en Twenty con el Briefing de Calificación
+    const qualRows = await query('SELECT * FROM lead_qualification WHERE lead_id = $1', [leadId]);
+    const qual = (qualRows[0] || {}) as Record<string, unknown>;
+
+    if (oppId || personId) {
+      const noteMarkdown = `### Briefing Ejecutivo de Calificación (FBS Studio)
+* **Servicio:** ${qual.service_needed || 'Branding integral'}
+* **Empresa:** ${lead.company_name || 'Agencia'}
+* **Desafío Comercial:** ${qual.business_problem || 'Consolidación de marca'}
+* **Decisión:** ${qual.decision_authority || 'Socio / Fundador'}
+* **Piso de Inversión:** Aprobado ($1.200.000 CLP)
+* **Score Calificación:** ${qual.score_total || 8} / 8 pts
+* **Agenda Cal.com:** https://cal.com/fbs-studio/consulta-30min?lead_id=${leadId}
+* **Formulario Pre-Llamada:** https://fbs.studio/precall/${leadId}`;
+
+      const noteRes = await fetch(`${apiUrl}/rest/notes`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: `Briefing Estratégico — ${lead.company_name || lead.first_name || 'Prospecto'}`,
+          bodyV2: { markdown: noteMarkdown }
+        })
+      });
+
+      if (noteRes.ok) {
+        const noteData = (await noteRes.json()) as { data?: { createNote?: { id: string } } };
+        const noteId = noteData.data?.createNote?.id;
+        if (noteId && oppId) {
+          await fetch(`${apiUrl}/rest/noteTargets`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ noteId, targetOpportunityId: oppId })
+          });
+        }
+      }
+
+      // 5. Crear Tarea para el Closer vinculada al Trato
+      if (oppId) {
+        const taskRes = await fetch(`${apiUrl}/rest/tasks`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: `Revisar respuestas de formulario pre-llamada antes del Meet con ${lead.first_name || 'Cliente'}`,
+            status: 'TODO',
+            dueAt: new Date(Date.now() + 86400000 * 2).toISOString()
+          })
+        });
+        if (taskRes.ok) {
+          const taskData = (await taskRes.json()) as { data?: { createTask?: { id: string } } };
+          const taskId = taskData.data?.createTask?.id;
+          if (taskId) {
+            await fetch(`${apiUrl}/rest/taskTargets`, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ taskId, targetOpportunityId: oppId })
+            });
+          }
+        }
+      }
+    }
+
 
     console.log(`[TWENTY SYNC SUCCESS] lead=${leadId} -> person=${personId}, company=${companyId}, opportunity=${oppId}`);
     return { personId, companyId, oppId };
