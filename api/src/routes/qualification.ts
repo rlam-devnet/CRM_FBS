@@ -240,4 +240,133 @@ export const qualificationRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
   );
+
+  // POST /leads/:id/qualification/batch - Actualiza múltiples campos de calificación extraídos por IA
+  fastify.post<{
+    Params: { id: string };
+    Body: {
+      service_needed?: string;
+      business_problem?: string;
+      decision_authority?: string;
+      investment_readiness?: string;
+      commitment_timeline?: string;
+      actor?: string;
+      raw_message?: string;
+    };
+  }>('/leads/:id/qualification/batch', async (request, reply) => {
+    const { id } = request.params;
+    const {
+      service_needed,
+      business_problem,
+      decision_authority,
+      investment_readiness,
+      commitment_timeline,
+      actor = 'agente_1_ia',
+      raw_message,
+    } = request.body || {};
+
+    const leadRows = await query('SELECT * FROM leads WHERE id = $1', [id]);
+    if (leadRows.length === 0) {
+      return reply.status(404).send({ error: 'Lead no encontrado' });
+    }
+    const lead = leadRows[0];
+
+    let qualRows = await query('SELECT * FROM lead_qualification WHERE lead_id = $1', [id]);
+    if (qualRows.length === 0) {
+      await query(
+        'INSERT INTO lead_qualification (lead_id, raw_answers) VALUES ($1, $2)',
+        [id, JSON.stringify({})]
+      );
+      qualRows = await query('SELECT * FROM lead_qualification WHERE lead_id = $1', [id]);
+    }
+    const qualification = qualRows[0];
+    const rawAnswers = (qualification.raw_answers || {}) as Record<string, unknown>;
+
+    const mergedInputs: QualificationInputs = {
+      serviceNeeded: service_needed && service_needed.trim().length > 0 ? service_needed : qualification.service_needed,
+      businessProblem: business_problem && business_problem.trim().length > 0 ? business_problem : qualification.business_problem,
+      decisionAuthority: decision_authority && decision_authority.trim().length > 0 ? decision_authority : qualification.decision_authority,
+      investmentReadiness: investment_readiness && investment_readiness.trim().length > 0 ? investment_readiness : qualification.investment_readiness,
+      commitmentTimeline: commitment_timeline && commitment_timeline.trim().length > 0 ? commitment_timeline : qualification.commitment_timeline,
+    };
+
+    if (service_needed) rawAnswers['P1'] = { answer: service_needed, timestamp: new Date().toISOString() };
+    if (business_problem) rawAnswers['P2'] = { answer: business_problem, timestamp: new Date().toISOString() };
+    if (decision_authority) rawAnswers['P3_AUTHORITY'] = { answer: decision_authority, timestamp: new Date().toISOString() };
+    if (investment_readiness) rawAnswers['P3_INVESTMENT'] = { answer: investment_readiness, timestamp: new Date().toISOString() };
+    if (commitment_timeline) rawAnswers['P4'] = { answer: commitment_timeline, timestamp: new Date().toISOString() };
+
+    const evalRes = evaluateQualification(mergedInputs);
+
+    let targetState = lead.current_state as string;
+    if (targetState === 'NEW_LEAD') {
+      targetState = 'QUALIFYING';
+    }
+    if (mergedInputs.commitmentTimeline && evalRes.recommendedState === 'QUALIFIED') {
+      targetState = 'QUALIFIED';
+    } else if (evalRes.recommendedState === 'HUMAN_REVIEW') {
+      targetState = 'HUMAN_REVIEW';
+    }
+
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT set_config('app.current_actor', $1, true)", [actor]);
+      await client.query("SELECT set_config('app.current_reason', $1, true)", [evalRes.statusReason || 'Actualización batch de calificación']);
+
+      await client.query(
+        `UPDATE lead_qualification
+         SET service_needed = $1,
+             business_problem = $2,
+             decision_authority = $3,
+             investment_readiness = $4,
+             commitment_timeline = $5,
+             score_total = $6,
+             score_breakdown = $7,
+             gate_authority_pass = $8,
+             gate_investment_pass = $9,
+             hard_stop_flags = $10,
+             raw_answers = $11,
+             updated_at = NOW()
+         WHERE lead_id = $12`,
+        [
+          mergedInputs.serviceNeeded || null,
+          mergedInputs.businessProblem || null,
+          mergedInputs.decisionAuthority || null,
+          mergedInputs.investmentReadiness || null,
+          mergedInputs.commitmentTimeline || null,
+          evalRes.scoreTotal,
+          JSON.stringify(evalRes.scoreBreakdown),
+          evalRes.gateAuthorityPass,
+          evalRes.gateInvestmentPass,
+          evalRes.hardStopFlags,
+          JSON.stringify(rawAnswers),
+          id,
+        ]
+      );
+
+      if (targetState !== lead.current_state) {
+        await client.query(
+          'UPDATE leads SET current_state = $1, updated_at = NOW() WHERE id = $2',
+          [targetState, id]
+        );
+      }
+
+      await client.query('COMMIT');
+
+      return reply.send({
+        lead_id: id,
+        current_state: targetState,
+        qualification: mergedInputs,
+        score_total: evalRes.scoreTotal,
+        gate_authority_pass: evalRes.gateAuthorityPass,
+        gate_investment_pass: evalRes.gateInvestmentPass,
+      });
+    } catch (err: unknown) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  });
 };
