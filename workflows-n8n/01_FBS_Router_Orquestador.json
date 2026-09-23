@@ -93,70 +93,28 @@
     },
     {
       "parameters": {
-        "jsCode": "const snapshot = $input.first().json;\nconst lead = snapshot.lead;\nconst qual = snapshot.qualification || {};\nconst raw = qual.raw_answers || {};\nconst chatHistory = snapshot.chat_history || [];\nconst procInput = $('Normalizar Processor Input').first().json;\nconst userText = procInput.text || '';\nconst state = lead.current_state;\nconst name = lead.first_name || 'hola';\nconst chatId = procInput.chat_id || lead.telegram_id;\n\nconst isAgente1 = ['NEW_LEAD', 'QUALIFYING', 'WARM', 'PARTIAL'].includes(state);\n\n// Extractor de contacto (email y teléfono)\nconst emailMatch = userText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);\nconst phoneMatch = userText.match(/(?:\\+?56\\s?9|\\+?\\d{1,3})?\\s?\\d{4,5}\\s?\\d{4}/);\nconst foundEmail = emailMatch ? emailMatch[0] : null;\nconst foundPhone = phoneMatch ? phoneMatch[0].trim() : null;\n\nconst knownData = {\n  service_needed: qual.service_needed || null,\n  business_problem: qual.business_problem || null,\n  decision_authority: qual.decision_authority || null,\n  investment_readiness: qual.investment_readiness || null,\n  commitment_timeline: qual.commitment_timeline || null\n};\n\nconst formattedHistory = chatHistory.length > 0 \n  ? chatHistory.map(m => `- ${m.role === 'user' ? 'Usuario' : 'Asistente FBS'}: \"${m.content}\"`).join('\\n')\n  : '(Primer turno de conversación - sin historial previo)';\n\nconst systemPrompt = `Eres el asistente conversacional oficial de Fernández Briceño Studio (FBS), un estudio de branding estratégico y diseño en Chile.\\nConversas por Telegram con ${name}. Tu misión es calificar al prospecto guiándolo por el guion oficial de forma inteligente, cálida, humana y ágil.\\n\\nLAS 4 DIMENSIONES DE CALIFICACIÓN FBS:\\n1. SERVICIO (P1): Qué necesitan trabajar (marca desde cero, rebranding, identidad visual, arquitectura de marca, brand book, naming, o marca + espacio físico).\\n2. NEGOCIO Y PROBLEMA (P2): A qué se dedican y cuál es el problema u objetivo principal que buscan resolver.\\n3. GATES COMERCIALES (P3):\\n   - Decisor (3A): Quién toma la decisión final (él/ella solo, con socios, o aprueba alguien más).\\n   - Presupuesto (3B): Proyectos parten desde $1.200.000 CLP. ¿Ese rango les hace sentido?\\n4. COMPROMISO (P4): Si ven buen encaje, si podrían coordinar videollamada de 30 min (sin costo) esta semana o en las próximas dos.\\n\\nREGLAS DE ORO DE MEMORIA Y HUMANIZACIÓN:\\n- Dispersa SIEMPRE tu respuesta en 2 o 3 mensajes cortos (un array JSON \"messages\"), simulando cómo chatea un humano.\\n- LEE CON ATENCIÓN EL HISTORIAL PREVIO. Si en el historial previo ya se le hizo una pregunta al usuario y el usuario responde afirmativamente (ej: el bot preguntó por los $1.200.000 CLP y el usuario dice \"sí, estaría bien / aunque me gustaría una reunión\"), ENTIENDE QUE YA ACEPTÓ EL PRESUPUESTO y que está pidiendo la reunión (P4). ¡NUNCA REPITAS UNA PREGUNTA QUE EL ASISTENTE YA HIZO EN EL HISTORIAL!\\n- Si el usuario pregunta qué otros servicios ofrecen: Explícale amablemente los servicios (marca desde cero, rebranding, identidad visual, arquitectura de marca, brand book, naming y espacios físicos) y pregúntale cuál le interesa.\\n- Si el usuario YA mencionó alguna dimensión o ya fue respondida en el historial, EXTRAE ese dato en \"extracted\" y continúa a la siguiente.\\n- Mensajes SIEMPRE CORTOS: máximo 1 a 2 líneas por burbuja. Emojis cercanos y profesionales (👋, ✨, 👌, 🚀, 🎯).\\n\\nHISTORIAL RECIENTE DE LA CONVERSACIÓN (MEMORIA PERSISTENTE):\\n${formattedHistory}\\n\\nDATOS YA REGISTRADOS EN EL CRM:\\n${JSON.stringify(knownData, null, 2)}\\n\\nMENSAJE ACTUAL DEL USUARIO:\\n\"${userText}\"\\n\\nDebes responder OBLIGATORIAMENTE en JSON con esta estructura exacta:\\n{\\n  \"extracted\": {\\n    \"service_needed\": \"valor extraído si el usuario lo dijo (o previo, o null)\",\\n    \"business_problem\": \"valor extraído si el usuario lo dijo (o previo, o null)\",\\n    \"decision_authority\": \"valor extraído si el usuario lo dijo (o previo, o null)\",\\n    \"investment_readiness\": \"valor extraído si el usuario lo dijo (o previo, o null)\",\\n    \"commitment_timeline\": \"valor extraído si el usuario lo dijo (o previo, o null)\"\\n  },\\n  \"next_pending_dimension\": \"P1\" | \"P2\" | \"P3_AUTHORITY\" | \"P3_INVESTMENT\" | \"P4\" | \"QUALIFIED\",\\n  \"messages\": [\\n    \"Burbuja 1 corta con micro-reacción y emoji\",\\n    \"Burbuja 2 con la pregunta exacta pendiente\"\\n  ]\\n}`;\n\nconst calLink = `https://cal.com/fbs-studio/consulta-30min?lead_id=${lead.id}`;\nconst formLink = `https://fbs.studio/precall/${lead.id}`;\nconst service = qual.service_needed || 'tu proyecto de marca';\n\n// Burbujas humanas y amigables para Agente 2\nlet agente2Messages = [];\nlet updateContact = false;\nconst lowerText = userText.toLowerCase().trim();\nconst isAcknowledgment = /(gracias|muchas gracias|ok|vale|perfecto|listo|dale|bueno|ya|chao|adios|saludos|atenci[oó]n|agradezco|excelente)/i.test(lowerText);\nconst isAskingForLink = /(link|enlace|agendar|pagina|web|donde|reuni[oó]n|cita)/i.test(lowerText);\n\nif (state === 'QUALIFIED') {\n  if (!lead.email && (foundEmail || foundPhone)) {\n    updateContact = true;\n    agente2Messages = [\n      `¡Excelente, ${name}! Ya registré tus datos de contacto 👌`, \n      `Aquí tienes el enlace de nuestra agenda para que elijas el día y hora que mejor te acomode: ${calLink}`\n    ];\n  } else if (!lead.email) {\n    agente2Messages = [\n      `¡Hola, ${name}! Soy parte del equipo de coordinación de FBS ✨`,\n      `Vimos lo que conversaste con el equipo sobre ${service} y el encaje es excelente 🎯`,\n      `Para poder coordinar la videollamada de 30 min (sin costo) y enviarte la invitación formal de Google Meet, ¿nos compartes tu correo corporativo y un teléfono de contacto?`\n    ];\n  } else if (isAcknowledgment) {\n    agente2Messages = [\n      `¡De nada, ${name}! Quedo súper atento ✨ Elige tu horario con calma en el enlace y cualquier duda me avisas por acá. ¡Que tengas un excelente día! 🙌`\n    ];\n  } else if (isAskingForLink) {\n    agente2Messages = [\n      `Aquí tienes el enlace de la agenda nuevamente: ${calLink}`,\n      `Cualquier duda que tengas al elegir la fecha, me avisas por acá 👌`\n    ];\n  } else {\n    agente2Messages = [\n      `Hola ${name}, ya tenemos tus datos registrados 👌 Cualquier duda adicional que tengas sobre la reunión, aquí estoy para ayudarte.`\n    ];\n  }\n} else if (state === 'CONSULTATION_PENDING') {\n  agente2Messages = [\n    `Tu cita ya está en agenda 📅`,\n    `Por favor completa este breve formulario de 5 minutos antes de la reunión para enfocar la llamada directamente en estrategia: ${formLink}`\n  ];\n} else {\n  agente2Messages = [\n    `Gracias por tu mensaje, ${name}. El equipo ya tiene tu caso registrado y te responderemos a la brevedad.`\n  ];\n}\n\nreturn [{\n  json: {\n    is_agente_1: isAgente1,\n    lead_id: lead.id,\n    chat_id: chatId,\n    user_answer: userText,\n    system_prompt: systemPrompt,\n    agente2_messages: agente2Messages,\n    update_contact: updateContact,\n    found_email: foundEmail,\n    found_phone: foundPhone\n  }\n}];"
+        "promptType": "define",
+        "text": "={{ $('Normalizar Processor Input').first().json.text }}",
+        "options": {
+          "systemMessage": "=Eres el asistente conversacional oficial de Fernández Briceño Studio (FBS), un estudio de branding estratégico y diseño en Chile.\nConversas por Telegram con {{ $('Normalizar Processor Input').first().json.first_name || 'el cliente' }}.\nTu misión es calificar al prospecto y coordinar una videollamada estratégica de 30 min (sin costo).\n\nDIRECTIVAS INVIOLABLES DE ROL Y TONO:\n1. Formato de respuesta: Divide SIEMPRE tu mensaje en 2 o 3 párrafos cortos separados por doble salto de línea (\\n\\n), simulando burbujas de chat. Cada párrafo debe tener máximo 1 a 2 líneas.\n2. Tono: Tuteo latino/chileno natural, empático, profesional y cercano. Usa emojis profesionales (👋, ✨, 👌, 🎯, 🚀, 🗓️, 🙌).\n3. Cero lenguaje robótico: PROHIBIDO decir \"procesando\", \"gracias por responder\", \"consulta registrada\", etc.\n4. REGLA DE MEMORIA: Tienes acceso a toda la conversación previa. NUNCA repitas una pregunta que ya hiciste o que el usuario ya respondió en turnos anteriores.\n\nGUION CONVERSACIONAL DE 4 PREGUNTAS (P1 a P4):\n- P1 (Servicio): Qué necesitan trabajar (marca desde cero, rebranding, identidad visual, arquitectura de marca, brand book, naming, o marca + espacio físico). Si ya lo mencionó en su saludo, acúsalo y pasa directo a P2.\n- P2 (Negocio y Problema): A qué se dedica su empresa y qué problema principal u objetivo buscan resolver con este proyecto.\n- P3A (Decisor): Quién toma la decisión final (solo, con socios, aprueba alguien más).\n- P3B (Inversión): Nuestros proyectos de marca parten desde $1.200.000 CLP. ¿Ese rango les hace sentido para lo que tienen contemplado?\n  * Si el usuario dice que se sale un poco o pregunta qué incluye: Explícale con calidez lo que abarca el servicio y pregúntale si les gustaría coordinar la videollamada estratégica de 30 min (sin costo) para ver cómo adaptar el alcance.\n- P4 (Compromiso): Coordinar la videollamada esta semana o la próxima.\n\nHERRAMIENTAS:\n- Llama a `actualizar_calificacion_crm` en cuanto el usuario revele información sobre servicio, problema, decisor o presupuesto.\n- Cuando el cliente acepte coordinar la videollamada: ¡Felicítalo por el encaje y pídele su correo corporativo y un teléfono de contacto para enviarle la invitación formal de Google Meet!\n- Cuando el cliente te dé su correo y teléfono:\n  1. Llama a `guardar_datos_contacto` con su email y teléfono.\n  2. Entrégale el enlace de la agenda para que elija día y hora: https://cal.com/fbs-studio/consulta-30min?lead_id={{ $('Consultar/Crear Lead en CRM API').first().json.lead_id }}\n- Si el cliente te da las gracias o dice \"ok / muchas gracias / perfecto / vale\":\n  Respóndele con amabilidad: \"¡De nada! Quedo súper atento ✨ Elige tu horario con calma en el enlace y cualquier duda me avisas por acá. ¡Que tengas un excelente día! 🙌\"\n  ¡Y NUNCA vuelvas a preguntarle si quiere una reunión ni le repitas el enlace!"
+        }
       },
-      "id": "node-agent-router-code",
-      "name": "Preparar Enrutamiento y Prompt",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [920, 480]
+      "id": "node-ai-agent",
+      "name": "AI Agent FBS",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [940, 480]
     },
     {
       "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict",
-            "version": 1
-          },
-          "conditions": [
-            {
-              "id": "cond-is-a1",
-              "leftValue": "={{ $json.is_agente_1 }}",
-              "rightValue": true,
-              "operator": {
-                "type": "boolean",
-                "operation": "equals"
-              }
-            }
-          ],
-          "combinator": "and"
-        },
+        "modelName": "models/gemini-2.5-flash",
         "options": {}
       },
-      "id": "node-if-agent-1",
-      "name": "¿Es Turno de Agente 1?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [1140, 480]
-    },
-    {
-      "parameters": {
-        "modelId": {
-          "__rl": true,
-          "mode": "list",
-          "value": "models/gemini-2.5-flash"
-        },
-        "messages": {
-          "values": [
-            {
-              "content": "={{ $json.system_prompt }}"
-            }
-          ]
-        },
-        "jsonOutput": true,
-        "options": {}
-      },
-      "id": "node-gemini-a1",
-      "name": "Google Gemini 2.5 - Agente 1",
-      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "id": "node-gemini-chat-model",
+      "name": "Google Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
       "typeVersion": 1,
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 1500,
-      "onError": "continueRegularOutput",
-      "position": [1380, 380],
+      "position": [880, 680],
       "credentials": {
         "googlePalmApi": {
           "id": "HGA4oBsMOuXPhO7N",
@@ -166,93 +124,51 @@
     },
     {
       "parameters": {
-        "jsCode": "let rawText = '';\nconst geminiOut = $input.first()?.json || {};\n\nif (geminiOut.content?.parts?.[0]?.text) {\n  rawText = geminiOut.content.parts[0].text;\n} else if (typeof geminiOut === 'string') {\n  rawText = geminiOut;\n}\n\nlet parsed = {};\nlet hasValidOutput = false;\ntry {\n  const clean = rawText.replace(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/i, '$1').trim();\n  parsed = JSON.parse(clean);\n  if (parsed.messages && Array.isArray(parsed.messages) && parsed.messages.length > 0 && parsed.messages.some(m => m.trim().length > 0)) {\n    hasValidOutput = true;\n  }\n} catch (e) {\n  parsed = {};\n}\n\nconst routeData = $('Preparar Enrutamiento y Prompt').first().json;\nconst ext = parsed.extracted || {};\nconst userQuery = (routeData.user_answer || '').toLowerCase();\n\nlet messagesList = [];\nif (hasValidOutput && Array.isArray(parsed.messages)) {\n  messagesList = parsed.messages.filter(m => typeof m === 'string' && m.trim().length > 0);\n} else {\n  // Fallback conversacional inteligente contextual si la API de IA tiene un hipo\n  if (userQuery.includes('otro') || userQuery.includes('servicio') || userQuery.includes('ofrecen')) {\n    messagesList = [\n      `¡Hola Richard! 👋 En FBS nos especializamos en branding estratégico integral.`,\n      `Trabajamos: marca desde cero, rebranding, identidad visual, arquitectura de marca, brand book, naming y diseño de espacios físicos ✨`,\n      `¿Hay alguno de estos enfoques que calce con lo que estás buscando hoy?`\n    ];\n  } else if (userQuery.includes('precio') || userQuery.includes('costo') || userQuery.includes('cuanto')) {\n    messagesList = [\n      `Para orientarte con total transparencia 💡`,\n      `Nuestros proyectos de branding y diseño estratégico parten desde $1.200.000 CLP.`,\n      `¿Ese rango hace sentido con lo que tienen contemplado invertir?`\n    ];\n  } else {\n    messagesList = [\n      `¡Hola Richard! Qué gusto saludarte por acá 👋`,\n      `Para partir y orientarte bien: ¿qué necesitan trabajar en este momento (marca desde cero, rebranding, identidad visual, brand book o naming)? ✨`\n    ];\n  }\n}\n\nreturn [{\n  json: {\n    lead_id: routeData.lead_id,\n    chat_id: routeData.chat_id,\n    messages: messagesList,\n    service_needed: ext.service_needed || null,\n    business_problem: ext.business_problem || null,\n    decision_authority: ext.decision_authority || null,\n    investment_readiness: ext.investment_readiness || null,\n    commitment_timeline: ext.commitment_timeline || null\n  }\n}];"
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Normalizar Processor Input').first().json.chat_id }}",
+        "contextWindowLength": 20
       },
-      "id": "node-parse-gemini-output",
-      "name": "Procesar Salida de Gemini",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1600, 380]
+      "id": "node-memory-buffer-window",
+      "name": "Window Buffer Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [1020, 680]
     },
     {
       "parameters": {
+        "name": "actualizar_calificacion_crm",
+        "description": "Llama a esta herramienta para guardar los datos de calificación del prospecto en el CRM.",
         "method": "POST",
-        "url": "=http://crm-api:3000/leads/{{ $json.lead_id }}/qualification/batch",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ service_needed: $json.service_needed || '', business_problem: $json.business_problem || '', decision_authority: $json.decision_authority || '', investment_readiness: $json.investment_readiness || '', commitment_timeline: $json.commitment_timeline || '', actor: 'agente_1_ia' }) }}",
-        "options": {}
+        "url": "=http://crm-api:3000/leads/{{ $('Consultar/Crear Lead en CRM API').first().json.lead_id }}/qualification/batch"
       },
-      "id": "node-agente-1-api",
-      "name": "Guardar Calificación en CRM API",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [1820, 380]
+      "id": "node-tool-crm",
+      "name": "Tool Calificación CRM",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [1160, 680]
     },
     {
       "parameters": {
-        "jsCode": "const geminiData = $('Procesar Salida de Gemini').first()?.json || {};\nconst routeData = $('Preparar Enrutamiento y Prompt').first()?.json || {};\n\nconst messagesList = (geminiData.messages && geminiData.messages.length > 0) \n  ? geminiData.messages \n  : ['¡Hola! Qué gusto saludarte, soy del equipo de FBS ✨'];\n\nreturn [{\n  json: {\n    chat_id: geminiData.chat_id || routeData.chat_id,\n    messages: messagesList,\n    lead_id: geminiData.lead_id || routeData.lead_id\n  }\n}];"
-      },
-      "id": "node-merge-reply",
-      "name": "Preparar Burbujas Telegram A1",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [2040, 380]
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict",
-            "version": 1
-          },
-          "conditions": [
-            {
-              "id": "cond-update-contact",
-              "leftValue": "={{ $json.update_contact }}",
-              "rightValue": true,
-              "operator": {
-                "type": "boolean",
-                "operation": "equals"
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      },
-      "id": "node-if-update-contact",
-      "name": "¿Guardar Contacto en CRM?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [1380, 600]
-    },
-    {
-      "parameters": {
+        "name": "guardar_datos_contacto",
+        "description": "Llama a esta herramienta cuando el cliente comparta su correo corporativo, teléfono de contacto o nombre de empresa.",
         "method": "PATCH",
-        "url": "=http://crm-api:3000/leads/{{ $json.lead_id }}/contact",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ email: $json.found_email || '', phone: $json.found_phone || '' }) }}",
-        "options": {}
+        "url": "=http://crm-api:3000/leads/{{ $('Consultar/Crear Lead en CRM API').first().json.lead_id }}/contact"
       },
-      "id": "node-patch-contact",
-      "name": "Guardar Email y Teléfono en CRM",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [1620, 560]
+      "id": "node-tool-contact",
+      "name": "Tool Contacto CRM",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [1300, 680]
     },
     {
       "parameters": {
-        "jsCode": "const item = $('Preparar Enrutamiento y Prompt').first().json;\nreturn [{\n  json: {\n    chat_id: item.chat_id,\n    messages: item.agente2_messages || ['¡Hola! Soy parte del equipo de coordinación de FBS ✨'],\n    lead_id: item.lead_id\n  }\n}];"
+        "jsCode": "const outputText = $input.first().json.output || '';\nconst chatId = $('Normalizar Processor Input').first().json.chat_id;\n\n// Dividir por doble salto de línea en burbujas separadas\nconst bubbles = outputText\n  .split(/\\n\\n+/)\n  .map(s => s.trim())\n  .filter(Boolean);\n\nconst messages = bubbles.length > 0 ? bubbles : [outputText.trim()];\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    messages: messages\n  }\n}];"
       },
-      "id": "node-format-reply-a2",
-      "name": "Agente 2 - Formatear Burbujas",
+      "id": "node-format-bubbles",
+      "name": "Formatear Burbujas",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1860, 600]
+      "position": [1260, 480]
     },
     {
       "parameters": {
@@ -267,7 +183,7 @@
       "name": "Enviar Burbujas a Telegram",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2280, 480],
+      "position": [1480, 480],
       "onError": "continueRegularOutput"
     }
   ],
@@ -331,116 +247,69 @@
       "main": [
         [
           {
-            "node": "Preparar Enrutamiento y Prompt",
+            "node": "AI Agent FBS",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Preparar Enrutamiento y Prompt": {
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent FBS",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Window Buffer Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent FBS",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Calificación CRM": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent FBS",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Contacto CRM": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent FBS",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent FBS": {
       "main": [
         [
           {
-            "node": "¿Es Turno de Agente 1?",
+            "node": "Formatear Burbujas",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "¿Es Turno de Agente 1?": {
-      "main": [
-        [
-          {
-            "node": "Google Gemini 2.5 - Agente 1",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "¿Guardar Contacto en CRM?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Google Gemini 2.5 - Agente 1": {
-      "main": [
-        [
-          {
-            "node": "Procesar Salida de Gemini",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Procesar Salida de Gemini": {
-      "main": [
-        [
-          {
-            "node": "Guardar Calificación en CRM API",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Guardar Calificación en CRM API": {
-      "main": [
-        [
-          {
-            "node": "Preparar Burbujas Telegram A1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Preparar Burbujas Telegram A1": {
-      "main": [
-        [
-          {
-            "node": "Enviar Burbujas a Telegram",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "¿Guardar Contacto en CRM?": {
-      "main": [
-        [
-          {
-            "node": "Guardar Email y Teléfono en CRM",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Agente 2 - Formatear Burbujas",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Guardar Email y Teléfono en CRM": {
-      "main": [
-        [
-          {
-            "node": "Agente 2 - Formatear Burbujas",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Agente 2 - Formatear Burbujas": {
+    "Formatear Burbujas": {
       "main": [
         [
           {
