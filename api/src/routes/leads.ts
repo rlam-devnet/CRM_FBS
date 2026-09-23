@@ -198,4 +198,30 @@ export const leadsRoutes: FastifyPluginAsync = async (fastify) => {
       recent_transitions: transitionRows,
     });
   });
+
+  // POST /webhook/dedupe - Idempotencia para webhooks de Telegram y WhatsApp
+  fastify.post<{ Body: { message_id: string | number; channel?: string; payload?: unknown } }>(
+    '/webhook/dedupe',
+    async (request, reply) => {
+      const { message_id, channel = 'telegram', payload = {} } = request.body || {};
+      if (!message_id) {
+        return reply.status(400).send({ error: 'message_id es requerido' });
+      }
+
+      const strId = String(message_id);
+      const rows = await query(
+        `INSERT INTO webhook_events (message_id, channel, payload, status)
+         VALUES ($1, $2, $3, 'processed')
+         ON CONFLICT (message_id) DO NOTHING
+         RETURNING message_id`,
+        [strId, channel, JSON.stringify(payload)]
+      );
+
+      const isDuplicate = rows.length === 0;
+      return reply.send({
+        message_id: strId,
+        is_duplicate: isDuplicate
+      });
+    }
+  );
 };

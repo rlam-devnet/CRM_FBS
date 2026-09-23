@@ -52,7 +52,7 @@ export const MESSAGE_TEMPLATES: Record<string, string[]> = {
     "Gracias por responder todo esto. Por ahora parece que estás en una etapa más de explorar que de decidir, y está bien — vamos a guardar tu info y te escribimos cuando tenga más sentido retomarlo. Si en el camino algo cambia, también puedes escribirnos tú."
   ],
   qualified_resumen: [
-    "Con esto ya tengo lo que necesitaba. Resumiendo: buscas trabajar en {servicio}, para resolver {problema}. Genial, te paso ahora con el equipo para coordinar la llamada."
+    "¡Genial! Con esto ya tenemos toda la información clave para coordinar la videollamada. Te paso de inmediato con el área de coordinación para agendar la fecha."
   ],
 
   // Reenganche y contingencias
