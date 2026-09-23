@@ -7,6 +7,8 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE TABLE IF NOT EXISTS leads (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     phone VARCHAR(50) UNIQUE,
+    email VARCHAR(150),
+    company_name VARCHAR(150),
     telegram_id VARCHAR(50) UNIQUE,
     first_name VARCHAR(100),
     last_name VARCHAR(100),
@@ -23,6 +25,7 @@ CREATE TABLE IF NOT EXISTS leads (
 CREATE INDEX IF NOT EXISTS idx_leads_phone ON leads(phone);
 CREATE INDEX IF NOT EXISTS idx_leads_telegram ON leads(telegram_id);
 CREATE INDEX IF NOT EXISTS idx_leads_state ON leads(current_state);
+CREATE INDEX IF NOT EXISTS idx_leads_email ON leads(email);
 
 -- 2. Table: state_transition_rules (Defined state machine constraints)
 CREATE TABLE IF NOT EXISTS state_transition_rules (

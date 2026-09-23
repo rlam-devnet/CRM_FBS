@@ -144,15 +144,16 @@ async function bootstrap() {
         <thead>
           <tr>
             <th>Nombre / Contacto</th>
-            <th>Canal</th>
+            <th>Empresa</th>
+            <th>Email</th>
+            <th>Teléfono</th>
             <th>Estado Actual</th>
             <th>Score</th>
-            <th>Última Interacción</th>
             <th>Acción</th>
           </tr>
         </thead>
         <tbody id="leads-tbody">
-          <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Cargando leads...</td></tr>
+          <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">Cargando leads...</td></tr>
         </tbody>
       </table>
     </div>
@@ -187,24 +188,26 @@ async function bootstrap() {
         // Table
         const tbody = document.getElementById('leads-tbody');
         if (leads.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 30px;">No hay leads registrados aún.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">No hay leads registrados aún.</td></tr>';
           return;
         }
 
         tbody.innerHTML = leads.map(l => {
-          const name = [l.first_name, l.last_name].filter(Boolean).join(' ') || l.telegram_id || l.phone || 'Sin nombre';
+          const name = [l.first_name, l.last_name].filter(Boolean).join(' ') || l.telegram_id || 'Prospecto';
           const score = l.score_total !== null ? l.score_total + ' / 8' : '—';
-          const date = new Date(l.last_interaction_at || l.created_at).toLocaleString('es-CL', { dateStyle: 'short', timeStyle: 'short' });
+          const emailDisplay = l.email ? '<span style="color:#60a5fa; font-weight:600;">' + l.email + '</span>' : '<span style="color:var(--text-muted);">Pendiente</span>';
+          const phoneDisplay = l.phone ? l.phone : '<span style="color:var(--text-muted);">Pendiente</span>';
           return \`
             <tr>
               <td>
                 <div style="font-weight: 600;">\${name}</div>
-                <div style="font-size: 11px; color: var(--text-muted);">ID: \${l.id.substring(0, 8)}... | \${l.telegram_id ? 'Telegram: ' + l.telegram_id : ''}</div>
+                <div style="font-size: 11px; color: var(--text-muted);">ID: \${l.id.substring(0, 8)}... | Telegram: \${l.telegram_id || '—'}</div>
               </td>
-              <td>\${l.channel}</td>
+              <td>\${l.company_name || '—'}</td>
+              <td>\${emailDisplay}</td>
+              <td>\${phoneDisplay}</td>
               <td><span class="badge badge-\${l.current_state}">\${l.current_state}</span></td>
               <td><span class="score-chip">\${score}</span></td>
-              <td style="color: var(--text-muted); font-size: 13px;">\${date}</td>
               <td><button class="btn-detail" onclick="openDetail('\${l.id}')">Ver Detalle</button></td>
             </tr>
           \`;
@@ -226,6 +229,14 @@ async function bootstrap() {
         document.getElementById('modal-title').innerText = name + ' (' + l.current_state + ')';
 
         let html = \`
+          <div class="detail-section">
+            <h4>Datos de Contacto del Cliente</h4>
+            <div class="q-row"><span class="q-label">Empresa / Negocio:</span> \${l.company_name || 'No registrada aún'}</div>
+            <div class="q-row"><span class="q-label">Email Corporativo:</span> \${l.email ? '<strong style="color:#60a5fa;">' + l.email + '</strong>' : 'Pendiente de captura'}</div>
+            <div class="q-row"><span class="q-label">Teléfono / WhatsApp:</span> \${l.phone || 'Pendiente de captura'}</div>
+            <div class="q-row"><span class="q-label">Canal / ID:</span> \${l.channel} (\${l.telegram_id || l.phone || '—'})</div>
+          </div>
+
           <div class="detail-section">
             <h4>Calificación Conversacional (P1 a P4)</h4>
             <div class="q-row"><span class="q-label">P1 Servicio:</span> \${q.service_needed || 'Pendiente'}</div>
@@ -275,7 +286,7 @@ async function bootstrap() {
   // API endpoint for dashboard leads list
   server.get('/api/dashboard/leads', async (_request, reply) => {
     const leads = await query(
-      `SELECT l.id, l.phone, l.telegram_id, l.first_name, l.last_name, l.channel, 
+      `SELECT l.id, l.phone, l.email, l.company_name, l.telegram_id, l.first_name, l.last_name, l.channel, 
               l.current_state, l.last_interaction_at, l.created_at,
               q.score_total, q.gate_authority_pass, q.gate_investment_pass
        FROM leads l

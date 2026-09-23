@@ -199,6 +199,49 @@ export const leadsRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
+  // PATCH /leads/:id/contact - Actualizar datos de contacto (email, phone, company_name)
+  fastify.patch<{
+    Params: { id: string };
+    Body: {
+      email?: string;
+      phone?: string;
+      company_name?: string;
+      first_name?: string;
+      last_name?: string;
+    };
+  }>('/leads/:id/contact', async (request, reply) => {
+    const { id } = request.params;
+    const { email, phone, company_name, first_name, last_name } = request.body || {};
+
+    const leadRows = await query('SELECT * FROM leads WHERE id = $1', [id]);
+    if (leadRows.length === 0) {
+      return reply.status(404).send({ error: 'Lead no encontrado' });
+    }
+
+    const current = leadRows[0];
+    const newEmail = email !== undefined ? email : current.email;
+    const newPhone = phone !== undefined ? phone : current.phone;
+    const newCompany = company_name !== undefined ? company_name : current.company_name;
+    const newFirst = first_name !== undefined ? first_name : current.first_name;
+    const newLast = last_name !== undefined ? last_name : current.last_name;
+
+    await query(
+      `UPDATE leads 
+       SET email = $1, phone = $2, company_name = $3, first_name = $4, last_name = $5, updated_at = NOW(), last_interaction_at = NOW()
+       WHERE id = $6`,
+      [newEmail, newPhone, newCompany, newFirst, newLast, id]
+    );
+
+    return reply.send({
+      lead_id: id,
+      email: newEmail,
+      phone: newPhone,
+      company_name: newCompany,
+      first_name: newFirst,
+      last_name: newLast,
+    });
+  });
+
   // POST /webhook/dedupe - Idempotencia para webhooks de Telegram y WhatsApp
   fastify.post<{ Body: { message_id: string | number; channel?: string; payload?: unknown } }>(
     '/webhook/dedupe',
