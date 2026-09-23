@@ -4,7 +4,7 @@ import { evaluateQualification, QualificationInputs } from '../scoring.js';
 import { getMessage } from '../message-keys.js';
 
 interface AnswerBody {
-  question: 'P1' | 'P2' | 'P3_AUTHORITY' | 'P3_INVESTMENT' | 'P4';
+  question: 'GREETING' | 'P0' | 'P1' | 'P2' | 'P3_AUTHORITY' | 'P3_INVESTMENT' | 'P4';
   raw_answer: string;
   answer_type?: 'text' | 'audio';
   actor?: string;
@@ -27,6 +27,41 @@ export const qualificationRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.status(404).send({ error: 'Lead no encontrado' });
       }
       const lead = leadRows[0];
+
+      // Caso especial: Primer saludo (GREETING o P0)
+      if (question === 'GREETING' || question === 'P0') {
+        const client = await getClient();
+        try {
+          await client.query('BEGIN');
+          await client.query("SELECT set_config('app.current_actor', $1, true)", [actor]);
+          await client.query("SELECT set_config('app.current_reason', $1, true)", ['Primer contacto del prospecto']);
+
+          if (lead.current_state === 'NEW_LEAD') {
+            await client.query(
+              "UPDATE leads SET current_state = 'QUALIFYING', updated_at = NOW() WHERE id = $1",
+              [id]
+            );
+          }
+          await client.query('COMMIT');
+
+          return reply.send({
+            lead_id: id,
+            current_state: 'QUALIFYING',
+            next_action: 'ASK_QUESTION',
+            next_question: 'P1',
+            message_text: getMessage('apertura') + '\n\n' + getMessage('pregunta_p1'),
+            score_total: 0,
+            gate_authority_pass: true,
+            gate_investment_pass: true,
+            hard_stop_flags: []
+          });
+        } catch (err: unknown) {
+          await client.query('ROLLBACK');
+          throw err;
+        } finally {
+          client.release();
+        }
+      }
 
       // 2. Obtener o crear lead_qualification
       let qualRows = await query('SELECT * FROM lead_qualification WHERE lead_id = $1', [id]);
@@ -91,7 +126,6 @@ export const qualificationRoutes: FastifyPluginAsync = async (fastify) => {
         } else {
           nextQuestion = 'P3_INVESTMENT';
           messageKey = 'pregunta_p3_inversion';
-          // Obtener piso de inversión configurado
           const configRows = await query("SELECT value FROM config_variables WHERE key = 'PISO_INVERSION'");
           const pisoVal = configRows[0]?.value || '$1.200.000 CLP';
           messageText = getMessage('pregunta_p3_inversion', { PISO_INVERSION: pisoVal });
