@@ -12,63 +12,57 @@
       "name": "Webhook Telegram Ingress",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [100, 300],
+      "position": [100, 200],
       "webhookId": "fbs-telegram-ingress"
     },
     {
       "parameters": {
         "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst message = body.message || body.channel_post || {};\nconst from = message.from || {};\nconst chat = message.chat || {};\n\nif (!message.text && !message.voice) {\n  return [{ json: { ignore: true, reason: 'No text or voice message' } }];\n}\n\nreturn [{\n  json: {\n    ignore: false,\n    telegram_id: String(from.id || chat.id),\n    chat_id: String(chat.id),\n    first_name: from.first_name || '',\n    last_name: from.last_name || '',\n    username: from.username || '',\n    text: (message.text || '').trim(),\n    message_id: String(message.message_id),\n    date: message.date,\n    is_voice: !!message.voice\n  }\n}];"
       },
-      "id": "node-normalizer",
+      "id": "node-normalizer-telegram",
       "name": "Normalizar Payload Telegram",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [300, 300]
+      "position": [300, 200]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "http://crm-api:3000/webhook/dedupe",
+        "url": "http://crm-api:3000/webhook/buffer",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"message_id\": \"{{ $json.message_id }}\",\n  \"channel\": \"telegram\"\n}",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $json.chat_id }}\",\n  \"telegram_id\": \"{{ $json.telegram_id }}\",\n  \"first_name\": \"{{ $json.first_name }}\",\n  \"last_name\": \"{{ $json.last_name }}\",\n  \"text\": \"{{ $json.text }}\",\n  \"message_id\": \"{{ $json.message_id }}\"\n}",
         "options": {}
       },
-      "id": "node-check-dedupe",
-      "name": "Verificar Duplicados",
+      "id": "node-buffer-crm",
+      "name": "Buffer en CRM API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [500, 300]
+      "position": [520, 200]
     },
     {
       "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict",
-            "version": 1
-          },
-          "conditions": [
-            {
-              "id": "cond-not-duplicate",
-              "leftValue": "={{ $json.is_duplicate }}",
-              "rightValue": false,
-              "operator": {
-                "type": "boolean",
-                "operation": "equals"
-              }
-            }
-          ],
-          "combinator": "and"
-        },
+        "httpMethod": "POST",
+        "path": "fbs-process-message",
+        "responseMode": "onReceived",
         "options": {}
       },
-      "id": "node-filter-duplicates",
-      "name": "¿Es Mensaje Nuevo?",
-      "type": "n8n-nodes-base.if",
+      "id": "node-webhook-processor",
+      "name": "Webhook Processor Ingress",
+      "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [700, 300]
+      "position": [100, 480],
+      "webhookId": "fbs-process-message-ingress"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst body = raw.body || raw;\nreturn [{\n  json: {\n    chat_id: String(body.chat_id || body.telegram_id),\n    telegram_id: String(body.telegram_id || body.chat_id),\n    first_name: body.first_name || '',\n    last_name: body.last_name || '',\n    text: (body.text || '').trim()\n  }\n}];"
+      },
+      "id": "node-normalizer-processor",
+      "name": "Normalizar Processor Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 480]
     },
     {
       "parameters": {
@@ -76,14 +70,14 @@
         "url": "http://crm-api:3000/leads",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"telegram_id\": \"{{ $('Normalizar Payload Telegram').first().json.telegram_id }}\",\n  \"channel\": \"telegram\",\n  \"first_name\": \"{{ $('Normalizar Payload Telegram').first().json.first_name }}\",\n  \"last_name\": \"{{ $('Normalizar Payload Telegram').first().json.last_name }}\"\n}",
+        "jsonBody": "={\n  \"telegram_id\": \"{{ $json.telegram_id }}\",\n  \"channel\": \"telegram\",\n  \"first_name\": \"{{ $json.first_name }}\",\n  \"last_name\": \"{{ $json.last_name }}\"\n}",
         "options": {}
       },
       "id": "node-crm-dedupe",
       "name": "Consultar/Crear Lead en CRM API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [920, 280]
+      "position": [500, 480]
     },
     {
       "parameters": {
@@ -95,17 +89,17 @@
       "name": "Obtener Snapshot Completo Lead",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1120, 280]
+      "position": [700, 480]
     },
     {
       "parameters": {
-        "jsCode": "const snapshot = $input.first().json;\nconst lead = snapshot.lead;\nconst qual = snapshot.qualification || {};\nconst raw = qual.raw_answers || {};\nconst chatData = $('Normalizar Payload Telegram').first().json;\nconst userText = chatData.text || '';\nconst state = lead.current_state;\nconst name = lead.first_name || 'hola';\n\nconst isAgente1 = ['NEW_LEAD', 'QUALIFYING', 'WARM', 'PARTIAL'].includes(state);\n\n// Extractor de contacto (email y teléfono)\nconst emailMatch = userText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);\nconst phoneMatch = userText.match(/(?:\\+?56\\s?9|\\+?\\d{1,3})?\\s?\\d{4,5}\\s?\\d{4}/);\nconst foundEmail = emailMatch ? emailMatch[0] : null;\nconst foundPhone = phoneMatch ? phoneMatch[0].trim() : null;\n\n// Mapeo estricto y secuencial de turnos de calificación\nlet currentAnswerFor = 'P1';\nlet nextQuestionGuide = 'Para partir: ¿qué necesitas trabajar en este momento (marca desde cero, rebranding, identidad visual, arquitectura de marca, brand book, naming, o marca + espacio físico)?';\n\nconst isFirstContact = (state === 'NEW_LEAD' && Object.keys(raw).length === 0);\n\nif (isFirstContact) {\n  currentAnswerFor = 'GREETING';\n  nextQuestionGuide = 'Para partir: ¿qué necesitas trabajar en este momento — marca desde cero, rebranding, identidad visual, arquitectura de marca, brand book, naming, o marca + espacio físico?';\n} else if (!raw.P1) {\n  currentAnswerFor = 'P1';\n  nextQuestionGuide = 'Cuéntame un poco de tu negocio — a qué se dedican y cuál es el problema principal que te gustaría resolver con este proyecto.';\n} else if (!raw.P2) {\n  currentAnswerFor = 'P2';\n  nextQuestionGuide = '¿Quién toma la decisión final sobre este proyecto — tú, tú con socios, o alguien más tiene que aprobarlo?';\n} else if (!raw.P3_AUTHORITY) {\n  currentAnswerFor = 'P3_AUTHORITY';\n  nextQuestionGuide = 'Para orientarte bien: nuestros proyectos de marca parten desde $1.200.000 CLP. ¿Ese rango te hace sentido para lo que estás pensando?';\n} else if (!raw.P3_INVESTMENT) {\n  currentAnswerFor = 'P3_INVESTMENT';\n  nextQuestionGuide = 'Si vemos que hay buen encaje, ¿podrías coordinar una videollamada con el equipo — esta semana, en las próximas dos, o prefieres info y precios primero?';\n} else if (!raw.P4) {\n  currentAnswerFor = 'P4';\n  nextQuestionGuide = 'Felicítalo por el encaje y dile brevemente que le pasas el contacto con coordinación para agendar la videollamada.';\n}\n\nconst systemPrompt = `Eres el asistente conversacional del equipo de Fernández Briceño Studio (FBS), un estudio de branding estratégico y diseño en Chile.\\nConversas de forma humana, cercana, ágil y profesional por Telegram con ${name}.\\n\\nDIRECTIVAS INVIOLABLES:\\n1. Tono: Tuteo latino/chileno natural y profesional. Mensajes CORTOS (máximo 2 a 3 líneas). Cero párrafos largos.\\n2. Cero lenguaje robótico: PROHIBIDO decir \"procesando\", \"gracias por responder\", \"consulta registrada\", etc.\\n3. Si es el primer mensaje o saludo del prospecto (${isFirstContact ? 'SÍ ES PRIMER CONTACTO' : 'NO'}), dale una bienvenida cálida presentándote como parte del equipo de FBS.\\n4. Si el prospecto acaba de contarte algo, haz siempre una micro-reacción corta y empática (ej: \"Ya, tiene sentido.\", \"Perfecto, eso ayuda a entender el panorama.\", \"Ok, anotado.\", \"Entiendo — pasa más de lo que crees.\", \"Buena info, gracias.\") antes de formular la siguiente pregunta.\\n5. NUNCA resumas repitiendo frases largas que dijo el usuario. Mantén las respuestas fluidas y concisas.\\n6. Si el usuario pregunta cómo lo van a contactar o por qué no se le piden datos: Explícale con total naturalidad que la videollamada se agenda directamente por link (Cal.com), donde él mismo elige día y hora e ingresa su correo para la invitación de Google Meet.\\n7. Si pregunta si eres bot: \"Soy un asistente del equipo — te ayudo a agilizar esto antes de pasarte con una persona real.\"\\n\\nTURNO ACTUAL:\\n- Nombre: ${name}\\n- Pregunta que el prospecto acaba de responder: ${currentAnswerFor}\\n- Mensaje que envió el prospecto: \"${userText}\"\\n- Pregunta que debes formular OBLIGATORIAMENTE a continuación: \"${nextQuestionGuide}\"\\n\\nResponde OBLIGATORIAMENTE en JSON:\\n{\\n  \"parsed_answer\": \"Texto limpio de la respuesta del prospecto a ${currentAnswerFor}\",\\n  \"bot_reply\": \"Tu mensaje exacto en español para Telegram (micro-reacción empática + ${nextQuestionGuide})\"\\n}`;\n\nconst calLink = `https://cal.com/fbs-studio/consulta-30min?lead_id=${lead.id}`;\nconst formLink = `https://fbs.studio/precall/${lead.id}`;\nconst service = qual.service_needed || 'tu proyecto de marca';\n\n// Lógica inteligente de Agente 2 con captura de datos de contacto fundamentales\nlet agente2Reply = '';\nlet updateContact = false;\nconst lowerText = userText.toLowerCase().trim();\nconst isShortAck = ['ok', 'vale', 'perfecto', 'listo', 'gracias', 'dale', 'bueno', 'ya'].includes(lowerText);\n\nif (state === 'QUALIFIED') {\n  if (!lead.email && (foundEmail || foundPhone)) {\n    // El usuario nos acaba de compartir su correo y/o teléfono\n    updateContact = true;\n    agente2Reply = `¡Excelente, ${name}! Ya registré tus datos de contacto (${foundEmail || ''} ${foundPhone || ''}).\\n\\nAquí tienes el enlace de nuestra agenda para que elijas el día y hora que mejor te acomode: ${calLink}`;\n  } else if (!lead.email) {\n    // Aún no tenemos sus datos de contacto principales\n    agente2Reply = `¡Hola, ${name}! Soy parte del equipo de coordinación de FBS. Vimos lo que conversaste con el equipo sobre ${service} y el encaje es excelente.\\n\\nPara poder coordinar la videollamada de 30 min (sin costo) y enviarte la invitación formal de Google Meet, ¿nos compartes tu correo corporativo y un teléfono de contacto? (y el nombre de tu empresa si deseas confirmarlo)`;\n  } else if (isShortAck) {\n    agente2Reply = `¡Quedo atento, ${name}! Elige con calma el horario en el enlace y cualquier duda me avisas por acá.`;\n  } else {\n    agente2Reply = `Hola ${name}, ya tenemos tus datos registrados. Puedes elegir tu horario para la videollamada estratégica en este enlace: ${calLink}`;\n  }\n} else if (state === 'CONSULTATION_PENDING') {\n  agente2Reply = `Tu cita ya está en agenda. Por favor completa este breve formulario de 5 minutos antes de la reunión para enfocar la llamada directamente en estrategia: ${formLink}`;\n} else {\n  agente2Reply = `Gracias por tu mensaje, ${name}. El equipo ya tiene tu caso registrado y te responderemos a la brevedad.`;\n}\n\nreturn [{\n  json: {\n    is_agente_1: isAgente1,\n    lead_id: lead.id,\n    chat_id: chatData.chat_id,\n    current_answer_for: currentAnswerFor,\n    user_answer: userText,\n    system_prompt: systemPrompt,\n    agente2_reply: agente2Reply,\n    update_contact: updateContact,\n    found_email: foundEmail,\n    found_phone: foundPhone\n  }\n}];"
+        "jsCode": "const snapshot = $input.first().json;\nconst lead = snapshot.lead;\nconst qual = snapshot.qualification || {};\nconst raw = qual.raw_answers || {};\nconst procInput = $('Normalizar Processor Input').first().json;\nconst userText = procInput.text || '';\nconst state = lead.current_state;\nconst name = lead.first_name || 'hola';\nconst chatId = procInput.chat_id || lead.telegram_id;\n\nconst isAgente1 = ['NEW_LEAD', 'QUALIFYING', 'WARM', 'PARTIAL'].includes(state);\n\n// Extractor de contacto (email y teléfono)\nconst emailMatch = userText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);\nconst phoneMatch = userText.match(/(?:\\+?56\\s?9|\\+?\\d{1,3})?\\s?\\d{4,5}\\s?\\d{4}/);\nconst foundEmail = emailMatch ? emailMatch[0] : null;\nconst foundPhone = phoneMatch ? phoneMatch[0].trim() : null;\n\n// Mapeo estricto y secuencial de turnos de calificación\nlet currentAnswerFor = 'P1';\nlet nextQuestionGuide = 'Para partir: ¿qué necesitas trabajar en este momento (marca desde cero, rebranding, identidad visual, arquitectura de marca, brand book, naming, o marca + espacio físico)?';\n\nconst isFirstContact = (state === 'NEW_LEAD' && Object.keys(raw).length === 0);\n\nif (isFirstContact) {\n  currentAnswerFor = 'GREETING';\n  nextQuestionGuide = 'Para partir: ¿qué necesitas trabajar en este momento — marca desde cero, rebranding, identidad visual, arquitectura de marca, brand book, naming, o marca + espacio físico?';\n} else if (!raw.P1) {\n  currentAnswerFor = 'P1';\n  nextQuestionGuide = 'Cuéntame un poco de tu negocio — a qué se dedican y cuál es el problema principal que te gustaría resolver con este proyecto.';\n} else if (!raw.P2) {\n  currentAnswerFor = 'P2';\n  nextQuestionGuide = '¿Quién toma la decisión final sobre este proyecto — tú, tú con socios, o alguien más tiene que aprobarlo?';\n} else if (!raw.P3_AUTHORITY) {\n  currentAnswerFor = 'P3_AUTHORITY';\n  nextQuestionGuide = 'Para orientarte bien: nuestros proyectos de marca parten desde $1.200.000 CLP. ¿Ese rango te hace sentido para lo que estás pensando?';\n} else if (!raw.P3_INVESTMENT) {\n  currentAnswerFor = 'P3_INVESTMENT';\n  nextQuestionGuide = 'Si vemos que hay buen encaje, ¿podrías coordinar una videollamada con el equipo — esta semana, en las próximas dos, o prefieres info y precios primero?';\n} else if (!raw.P4) {\n  currentAnswerFor = 'P4';\n  nextQuestionGuide = 'Felicítalo por el encaje y dile brevemente que le pasas el contacto con coordinación para agendar la videollamada.';\n}\n\nconst systemPrompt = `Eres el asistente conversacional del equipo de Fernández Briceño Studio (FBS), un estudio de branding estratégico y diseño en Chile.\\nConversas de forma humana, cercana, ágil y profesional por Telegram con ${name}.\\n\\nDIRECTIVAS INVIOLABLES:\\n1. Tono: Tuteo latino/chileno natural y profesional. Mensajes CORTOS (máximo 2 a 3 líneas). Cero párrafos largos.\\n2. Cero lenguaje robótico: PROHIBIDO decir \"procesando\", \"gracias por responder\", \"consulta registrada\", etc.\\n3. Si es el primer mensaje o saludo del prospecto (${isFirstContact ? 'SÍ ES PRIMER CONTACTO' : 'NO'}), dale una bienvenida cálida presentándote como parte del equipo de FBS.\\n4. Si el prospecto acaba de contarte algo, haz siempre una micro-reacción corta y empática (ej: \"Ya, tiene sentido.\", \"Perfecto, eso ayuda a entender el panorama.\", \"Ok, anotado.\", \"Entiendo — pasa más de lo que crees.\", \"Buena info, gracias.\") antes de formular la siguiente pregunta.\\n5. NUNCA resumas repitiendo frases largas o textuales que dijo el usuario. Mantén las respuestas fluidas y concisas.\\n6. Si el usuario pregunta cómo lo van a contactar o por qué no se le piden datos: Explícale con total naturalidad que la videollamada se agenda directamente por link (Cal.com), donde él mismo elige día y hora e ingresa su correo para la invitación de Google Meet.\\n7. Si pregunta si eres bot: \"Soy un asistente del equipo — te ayudo a agilizar esto antes de pasarte con una persona real.\"\\n\\nTURNO ACTUAL:\\n- Nombre: ${name}\\n- Pregunta que el prospecto acaba de responder: ${currentAnswerFor}\\n- Mensaje que envió el prospecto: \"${userText}\"\\n- Pregunta que debes formular OBLIGATORIAMENTE a continuación: \"${nextQuestionGuide}\"\\n\\nResponde OBLIGATORIAMENTE en JSON:\\n{\\n  \"parsed_answer\": \"Texto limpio de la respuesta del prospecto a ${currentAnswerFor}\",\\n  \"bot_reply\": \"Tu mensaje exacto en español para Telegram (micro-reacción empática + ${nextQuestionGuide})\"\\n}`;\n\nconst calLink = `https://cal.com/fbs-studio/consulta-30min?lead_id=${lead.id}`;\nconst formLink = `https://fbs.studio/precall/${lead.id}`;\nconst service = qual.service_needed || 'tu proyecto de marca';\n\n// Lógica inteligente de Agente 2 con captura de datos y cero repetición de enlaces\nlet agente2Reply = '';\nlet updateContact = false;\nconst lowerText = userText.toLowerCase().trim();\nconst isAcknowledgment = /(gracias|muchas gracias|ok|vale|perfecto|listo|dale|bueno|ya|chao|adios|saludos|atenci[oó]n|agradezco|excelente)/i.test(lowerText);\nconst isAskingForLink = /(link|enlace|agendar|pagina|web|donde|reuni[oó]n|cita)/i.test(lowerText);\n\nif (state === 'QUALIFIED') {\n  if (!lead.email && (foundEmail || foundPhone)) {\n    updateContact = true;\n    agente2Reply = `¡Excelente, ${name}! Ya registré tus datos de contacto (${[foundEmail, foundPhone].filter(Boolean).join(' ')}).\\n\\nAquí tienes el enlace de nuestra agenda para que elijas el día y hora que mejor te acomode: ${calLink}`;\n  } else if (!lead.email) {\n    agente2Reply = `¡Hola, ${name}! Soy parte del equipo de coordinación de FBS. Vimos lo que conversaste con el equipo sobre ${service} y el encaje es excelente.\\n\\nPara poder coordinar la videollamada de 30 min (sin costo) y enviarte la invitación formal de Google Meet, ¿nos compartes tu correo corporativo y un teléfono de contacto? (y el nombre de tu empresa si deseas confirmarlo)`;\n  } else if (isAcknowledgment) {\n    agente2Reply = `¡De nada, ${name}! Quedo súper atento. Elige tu horario con calma en el enlace y cualquier duda me avisas por acá. ¡Que tengas un excelente día!`;\n  } else if (isAskingForLink) {\n    agente2Reply = `Aquí tienes el enlace de la agenda nuevamente: ${calLink}\\nCualquier duda que tengas al elegir la fecha, me avisas.`;\n  } else {\n    agente2Reply = `Hola ${name}, ya tenemos tus datos registrados. Cualquier duda adicional que tengas sobre la reunión, aquí estoy para ayudarte.`;\n  }\n} else if (state === 'CONSULTATION_PENDING') {\n  agente2Reply = `Tu cita ya está en agenda. Por favor completa este breve formulario de 5 minutos antes de la reunión para enfocar la llamada directamente en estrategia: ${formLink}`;\n} else {\n  agente2Reply = `Gracias por tu mensaje, ${name}. El equipo ya tiene tu caso registrado y te responderemos a la brevedad.`;\n}\n\nreturn [{\n  json: {\n    is_agente_1: isAgente1,\n    lead_id: lead.id,\n    chat_id: chatId,\n    current_answer_for: currentAnswerFor,\n    user_answer: userText,\n    system_prompt: systemPrompt,\n    agente2_reply: agente2Reply,\n    update_contact: updateContact,\n    found_email: foundEmail,\n    found_phone: foundPhone\n  }\n}];"
       },
       "id": "node-agent-router-code",
       "name": "Preparar Enrutamiento y Prompt",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1320, 280]
+      "position": [920, 480]
     },
     {
       "parameters": {
@@ -135,7 +129,7 @@
       "name": "¿Es Turno de Agente 1?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1540, 280]
+      "position": [1140, 480]
     },
     {
       "parameters": {
@@ -162,7 +156,7 @@
       "maxTries": 3,
       "waitBetweenTries": 1500,
       "onError": "continueRegularOutput",
-      "position": [1780, 160],
+      "position": [1380, 380],
       "credentials": {
         "googlePalmApi": {
           "id": "HGA4oBsMOuXPhO7N",
@@ -178,7 +172,7 @@
       "name": "Procesar Salida de Gemini",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2000, 160]
+      "position": [1600, 380]
     },
     {
       "parameters": {
@@ -193,7 +187,7 @@
       "name": "Actualizar Estado en CRM API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2220, 160]
+      "position": [1820, 380]
     },
     {
       "parameters": {
@@ -203,7 +197,7 @@
       "name": "Preparar Mensaje Final Telegram",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2440, 160]
+      "position": [2040, 380]
     },
     {
       "parameters": {
@@ -233,7 +227,7 @@
       "name": "¿Guardar Contacto en CRM?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1780, 400]
+      "position": [1380, 600]
     },
     {
       "parameters": {
@@ -248,7 +242,7 @@
       "name": "Guardar Email y Teléfono en CRM",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2020, 360]
+      "position": [1620, 560]
     },
     {
       "parameters": {
@@ -258,7 +252,7 @@
       "name": "Agente 2 - Formatear Salida",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2260, 400]
+      "position": [1860, 600]
     },
     {
       "parameters": {
@@ -273,7 +267,7 @@
       "name": "Enviar Mensaje a Telegram",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2680, 280],
+      "position": [2280, 480],
       "onError": "continueRegularOutput"
     }
   ],
@@ -293,25 +287,25 @@
       "main": [
         [
           {
-            "node": "Verificar Duplicados",
+            "node": "Buffer en CRM API",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Verificar Duplicados": {
+    "Webhook Processor Ingress": {
       "main": [
         [
           {
-            "node": "¿Es Mensaje Nuevo?",
+            "node": "Normalizar Processor Input",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "¿Es Mensaje Nuevo?": {
+    "Normalizar Processor Input": {
       "main": [
         [
           {

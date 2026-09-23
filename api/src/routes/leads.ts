@@ -21,6 +21,54 @@ interface UpdateStateBody {
   actor: string;
   reason?: string;
 }
+interface BufferMessageBody {
+  chat_id: string | number;
+  telegram_id?: string | number;
+  first_name?: string;
+  last_name?: string;
+  text: string;
+  message_id?: string | number;
+}
+
+interface ChatBuffer {
+  chat_id: string;
+  telegram_id: string;
+  first_name: string;
+  last_name: string;
+  texts: string[];
+  timer: NodeJS.Timeout;
+}
+
+const activeBuffers = new Map<string, ChatBuffer>();
+
+async function flushBuffer(chatId: string) {
+  const buf = activeBuffers.get(chatId);
+  if (!buf) return;
+  activeBuffers.delete(chatId);
+
+  const combinedText = buf.texts.join('\n').trim();
+  if (!combinedText) return;
+
+  console.log(`[DEBOUNCE FLUSH] chatId=${chatId}, combined ${buf.texts.length} messages: "${combinedText}"`);
+
+  try {
+    const n8nUrl = process.env.N8N_INTERNAL_URL || 'http://n8n:5678';
+    await fetch(`${n8nUrl}/webhook/fbs-process-message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: buf.chat_id,
+        telegram_id: buf.telegram_id,
+        first_name: buf.first_name,
+        last_name: buf.last_name,
+        text: combinedText,
+      }),
+    });
+  } catch (err) {
+    console.error(`[DEBOUNCE ERROR] Failed to dispatch combined message to n8n:`, err);
+  }
+}
+
 
 export const leadsRoutes: FastifyPluginAsync = async (fastify) => {
   // POST /leads - Deduplicate or create
@@ -267,4 +315,58 @@ export const leadsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
   );
+  // POST /webhook/buffer - Buffers and debounces user messages by chat_id
+  fastify.post<{ Body: BufferMessageBody }>('/webhook/buffer', async (request, reply) => {
+    const { chat_id, telegram_id, first_name = '', last_name = '', text, message_id } = request.body || {};
+
+    if (!chat_id || !text) {
+      return reply.status(400).send({ error: 'chat_id y text son requeridos' });
+    }
+
+    const cId = String(chat_id);
+    const tId = String(telegram_id || chat_id);
+
+    if (message_id) {
+      const rows = await query(
+        `INSERT INTO webhook_events (message_id, channel, payload, status)
+         VALUES ($1, 'telegram', $2, 'buffered')
+         ON CONFLICT (message_id) DO NOTHING
+         RETURNING message_id`,
+        [String(message_id), JSON.stringify({ chat_id: cId, text })]
+      );
+      if (rows.length === 0) {
+        return reply.send({ status: 'duplicate_ignored' });
+      }
+    }
+
+    let buf = activeBuffers.get(cId);
+    if (buf) {
+      clearTimeout(buf.timer);
+      buf.texts.push(text);
+      if (first_name) buf.first_name = first_name;
+      if (last_name) buf.last_name = last_name;
+    } else {
+      buf = {
+        chat_id: cId,
+        telegram_id: tId,
+        first_name,
+        last_name,
+        texts: [text],
+        timer: setTimeout(() => {}, 0),
+      };
+      activeBuffers.set(cId, buf);
+    }
+
+    const DEBOUNCE_MS = 3500;
+    buf.timer = setTimeout(() => {
+      flushBuffer(cId).catch(console.error);
+    }, DEBOUNCE_MS);
+
+    return reply.send({
+      status: 'buffered',
+      chat_id: cId,
+      buffer_count: buf.texts.length,
+      wait_ms: DEBOUNCE_MS,
+    });
+  });
 };
