@@ -41,6 +41,18 @@ interface ChatBuffer {
 
 const activeBuffers = new Map<string, ChatBuffer>();
 
+async function sendTelegramTyping(chatId: string) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, action: 'typing' }),
+    });
+  } catch {}
+}
+
 async function flushBuffer(chatId: string) {
   const buf = activeBuffers.get(chatId);
   if (!buf) return;
@@ -339,6 +351,8 @@ export const leadsRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
+    sendTelegramTyping(cId).catch(() => {});
+
     let buf = activeBuffers.get(cId);
     if (buf) {
       clearTimeout(buf.timer);
@@ -357,8 +371,9 @@ export const leadsRoutes: FastifyPluginAsync = async (fastify) => {
       activeBuffers.set(cId, buf);
     }
 
-    const DEBOUNCE_MS = 3500;
+    const DEBOUNCE_MS = parseInt(process.env.DEBOUNCE_MS || '6500', 10);
     buf.timer = setTimeout(() => {
+      sendTelegramTyping(cId).catch(() => {});
       flushBuffer(cId).catch(console.error);
     }, DEBOUNCE_MS);
 

@@ -35,6 +35,8 @@ services:
       PGPASSWORD: fbs_secret_password_2026
       PGDATABASE: fbs_crm
       NODE_ENV: production
+      TELEGRAM_BOT_TOKEN: 8817198126:AAHreDqi1CWBBIYzZBMfir-VB7jUkxLUQ8s
+      DEBOUNCE_MS: 6500
     ports:
       - "3000:3000"
     depends_on:
