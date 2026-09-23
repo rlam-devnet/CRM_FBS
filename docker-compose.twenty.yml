@@ -1,0 +1,81 @@
+services:
+  twenty-redis:
+    image: redis:alpine
+    container_name: twenty-redis
+    restart: unless-stopped
+    command: ["--maxmemory-policy", "noeviction"]
+    deploy:
+      resources:
+        limits:
+          memory: 150M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+
+  twenty-server:
+    image: twentycrm/twenty:latest
+    container_name: twenty-server
+    restart: unless-stopped
+    volumes:
+      - twenty-data:/app/packages/twenty-server/.local-storage
+    ports:
+      - "3001:3000"
+    environment:
+      NODE_PORT: 3000
+      PORT: 3000
+      PG_DATABASE_URL: postgres://fbs_admin:fbs_secret_password_2026@postgres:5432/twenty
+      SERVER_URL: http://localhost:3001
+      REDIS_URL: redis://twenty-redis:6379
+      STORAGE_TYPE: local
+      ENCRYPTION_KEY: 43754e563700f73b4ac9ba03346538da2be29145ea6c17e9a399b891c6df2374
+      APP_SECRET: 9e67cfd0d4d29e9cdbd46fe20c3e8bbb9c10b9bf6526317f899fa27f320a96ae
+      DISABLE_DB_MIGRATIONS: "false"
+      DISABLE_CRON_JOBS_REGISTRATION: "false"
+    deploy:
+      resources:
+        limits:
+          memory: 1200M
+    depends_on:
+      twenty-redis:
+        condition: service_healthy
+    networks:
+      - default
+
+  twenty-worker:
+    image: twentycrm/twenty:latest
+    container_name: twenty-worker
+    restart: unless-stopped
+    volumes:
+      - twenty-data:/app/packages/twenty-server/.local-storage
+    command: ["yarn", "worker:prod"]
+    environment:
+      PG_DATABASE_URL: postgres://fbs_admin:fbs_secret_password_2026@postgres:5432/twenty
+      SERVER_URL: http://localhost:3001
+      REDIS_URL: redis://twenty-redis:6379
+      STORAGE_TYPE: local
+      ENCRYPTION_KEY: 43754e563700f73b4ac9ba03346538da2be29145ea6c17e9a399b891c6df2374
+      APP_SECRET: 9e67cfd0d4d29e9cdbd46fe20c3e8bbb9c10b9bf6526317f899fa27f320a96ae
+      DISABLE_DB_MIGRATIONS: "true"
+      DISABLE_CRON_JOBS_REGISTRATION: "true"
+    deploy:
+      resources:
+        limits:
+          memory: 600M
+    depends_on:
+      twenty-server:
+        condition: service_started
+    networks:
+      - default
+
+volumes:
+  twenty-data:
+    name: twenty_local_data
+
+networks:
+  default:
+    name: n8n_default
+    external: true
