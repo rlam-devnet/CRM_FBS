@@ -157,6 +157,18 @@ CREATE TABLE IF NOT EXISTS commercial_gate_evaluations (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 13. Table: chat_messages (Persistent conversational memory)
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id SERIAL PRIMARY KEY,
+    chat_id VARCHAR(50) NOT NULL,
+    lead_id UUID REFERENCES leads(id) ON DELETE CASCADE,
+    role VARCHAR(20) NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON chat_messages(chat_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_lead ON chat_messages(lead_id);
+
 -- TRIGGERS & FUNCTIONS
 
 -- Function to validate state transition against state_transition_rules

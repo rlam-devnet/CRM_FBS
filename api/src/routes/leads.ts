@@ -74,6 +74,18 @@ async function flushBuffer(chatId: string) {
   if (!combinedText) return;
 
   console.log(`[DEBOUNCE FLUSH] chatId=${chatId}, combined ${buf.texts.length} messages: "${combinedText}"`);
+  // Grabar mensaje del usuario en memoria conversacional persistente
+  try {
+    const leadRows = await query('SELECT id FROM leads WHERE telegram_id = $1 LIMIT 1', [buf.telegram_id]);
+    const leadId = leadRows[0]?.id || null;
+    await query(
+      'INSERT INTO chat_messages (chat_id, lead_id, role, content) VALUES ($1, $2, $3, $4)',
+      [buf.chat_id, leadId, 'user', combinedText]
+    );
+  } catch (err) {
+    console.error('[CHAT RECORD ERROR (user)]', err);
+  }
+
 
   try {
     const n8nUrl = process.env.N8N_INTERNAL_URL || 'http://n8n:5678';
@@ -261,13 +273,17 @@ export const leadsRoutes: FastifyPluginAsync = async (fastify) => {
       'SELECT from_state, to_state, actor, reason, created_at FROM state_transitions WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 10',
       [id]
     );
-
+    const chatHistoryRows = await query(
+      'SELECT role, content, created_at FROM chat_messages WHERE lead_id = $1 ORDER BY created_at ASC LIMIT 20',
+      [id]
+    );
     return reply.send({
       lead: leadRows[0],
       qualification: qualificationRows[0] || null,
       precall_form: precallRows[0] || null,
       consultations: consultationRows,
       recent_transitions: transitionRows,
+      chat_history: chatHistoryRows,
     });
   });
 
@@ -422,6 +438,16 @@ export const leadsRoutes: FastifyPluginAsync = async (fastify) => {
           await new Promise((r) => setTimeout(r, typingDelay));
           // Entregar burbuja en Telegram
           await sendSingleTelegramMessage(cId, text);
+          // Grabar mensaje del bot en memoria conversacional persistente
+          try {
+            const leadRows = await query('SELECT id FROM leads WHERE telegram_id = $1 LIMIT 1', [cId]);
+            const leadId = leadRows[0]?.id || null;
+            await query(
+              'INSERT INTO chat_messages (chat_id, lead_id, role, content) VALUES ($1, $2, $3, $4)',
+              [cId, leadId, 'assistant', text]
+            );
+          } catch {}
+
         }
       })().catch((err) => console.error('[SEND-MULTI ERROR]', err));
 

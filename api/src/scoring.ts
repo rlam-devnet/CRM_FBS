@@ -83,22 +83,44 @@ export function evaluateQualification(inputs: QualificationInputs): ScoreResult 
   let investmentScore = 0;
   let gateInvestmentPass = true;
   const inv = inputs.investmentReadiness ? inputs.investmentReadiness.toUpperCase() : '';
-  if (inv === 'A' || inv.includes('SI') || inv.includes('TOTALMENTE')) {
+  if (
+    inv === 'A' ||
+    inv.includes('SI') ||
+    inv.includes('SÍ') ||
+    inv.includes('BIEN') ||
+    inv.includes('TOTALMENTE') ||
+    inv.includes('CALZA') ||
+    inv.includes('TENEMOS') ||
+    inv.includes('ACUERDO') ||
+    inv.includes('PERFECTO') ||
+    inv.includes('DENTRO') ||
+    inv.includes('MARGEN') ||
+    inv.includes('PRESUPUESTO')
+  ) {
     investmentScore = 2;
   } else if (inv === 'B' || inv.includes('AJUSTADO')) {
     investmentScore = 1;
   } else if (inv === 'C') {
     investmentScore = 1;
-  } else if (inv === 'D' || inv.includes('NO') || inv.includes('CARO')) {
+  } else if (inv === 'D' || inv.includes('NO') || inv.includes('CARO') || inv.includes('MUCHO')) {
     investmentScore = 0;
     gateInvestmentPass = false;
   }
 
   let commitmentScore = 0;
   const comm = inputs.commitmentTimeline ? inputs.commitmentTimeline.toUpperCase() : '';
-  if (comm === 'A' || comm.includes('SEMANA')) {
+  if (
+    comm === 'A' ||
+    comm.includes('SEMANA') ||
+    comm.includes('REUNION') ||
+    comm.includes('REUNIÓN') ||
+    comm.includes('LLAMADA') ||
+    comm.includes('AGENDAR') ||
+    comm.includes('COORDINAR') ||
+    comm.includes('DUDAS')
+  ) {
     commitmentScore = 2;
-  } else if (comm === 'B' || comm.includes('DOS SEMANAS')) {
+  } else if (comm === 'B' || comm.includes('DOS SEMANAS') || comm.includes('PRÓXIMAS')) {
     commitmentScore = 1;
   } else {
     commitmentScore = 0;
