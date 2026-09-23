@@ -52,6 +52,18 @@ async function sendTelegramTyping(chatId: string) {
     });
   } catch {}
 }
+async function sendSingleTelegramMessage(chatId: string, text: string) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text }),
+    });
+  } catch {}
+}
+
 
 async function flushBuffer(chatId: string) {
   const buf = activeBuffers.get(chatId);
@@ -384,4 +396,36 @@ export const leadsRoutes: FastifyPluginAsync = async (fastify) => {
       wait_ms: DEBOUNCE_MS,
     });
   });
+
+  // POST /telegram/send-multi - Envía múltiples burbujas con indicador de escritura y pausas humanas
+  fastify.post<{ Body: { chat_id: string | number; messages: string[] } }>(
+    '/telegram/send-multi',
+    async (request, reply) => {
+      const { chat_id, messages } = request.body || {};
+      if (!chat_id || !Array.isArray(messages) || messages.length === 0) {
+        return reply.status(400).send({ error: 'chat_id y array messages requeridos' });
+      }
+
+      const cId = String(chat_id);
+
+      // Ejecutar en background con pausas humanas entre burbujas
+      (async () => {
+        for (let i = 0; i < messages.length; i++) {
+          const text = messages[i]?.trim();
+          if (!text) continue;
+
+          // Activar "escribiendo..." antes de cada burbuja
+          await sendTelegramTyping(cId);
+
+          // Pausa humana de lectura y digitación (1.2s a 2.5s según largo)
+          const typingDelay = Math.min(Math.max(text.length * 30, 1200), 2500);
+          await new Promise((r) => setTimeout(r, typingDelay));
+          // Entregar burbuja en Telegram
+          await sendSingleTelegramMessage(cId, text);
+        }
+      })().catch((err) => console.error('[SEND-MULTI ERROR]', err));
+
+      return reply.send({ status: 'queued', count: messages.length });
+    }
+  );
 };
