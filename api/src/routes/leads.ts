@@ -287,6 +287,83 @@ export const leadsRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
+async function syncToTwentyCRM(leadId: string) {
+  const apiUrl = process.env.TWENTY_API_URL;
+  const apiKey = process.env.TWENTY_API_KEY;
+  if (!apiUrl || !apiKey) return null;
+
+  try {
+    const leadRows = await query('SELECT * FROM leads WHERE id = $1', [leadId]);
+    if (leadRows.length === 0) return null;
+    const lead = leadRows[0];
+
+    if (lead.twenty_person_id) return lead.twenty_person_id;
+
+    let companyId: string | null = null;
+    if (lead.company_name && lead.company_name.trim().length > 0) {
+      const compRes = await fetch(`${apiUrl}/rest/companies`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: lead.company_name.trim() })
+      });
+      if (compRes.ok) {
+        const compData = (await compRes.json()) as { data?: { createCompany?: { id: string } } };
+        companyId = compData.data?.createCompany?.id || null;
+      }
+    }
+
+    const personPayload: Record<string, unknown> = {
+      name: {
+        firstName: lead.first_name || 'Prospecto',
+        lastName: lead.last_name || ''
+      }
+    };
+    if (lead.email) personPayload.emails = { primaryEmail: lead.email };
+    if (lead.phone) personPayload.phones = { primaryPhoneNumber: lead.phone };
+    if (companyId) personPayload.companyId = companyId;
+
+    let personId: string | null = null;
+    const personRes = await fetch(`${apiUrl}/rest/people`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(personPayload)
+    });
+    if (personRes.ok) {
+      const personData = (await personRes.json()) as { data?: { createPerson?: { id: string } } };
+      personId = personData.data?.createPerson?.id || null;
+    }
+    let oppId: string | null = null;
+    const oppName = `Branding - ${lead.company_name || lead.first_name || 'Nuevo Prospecto'}`;
+    const oppPayload: Record<string, unknown> = {
+      name: oppName,
+      amount: { amountMicros: 1200000000000, currencyCode: 'CLP' },
+      stage: 'MEETING'
+    };
+    if (companyId) oppPayload.companyId = companyId;
+    if (personId) oppPayload.pointOfContactId = personId;
+
+    const oppRes = await fetch(`${apiUrl}/rest/opportunities`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(oppPayload)
+    });
+    if (oppRes.ok) {
+      const oppData = (await oppRes.json()) as { data?: { createOpportunity?: { id: string } } };
+      oppId = oppData.data?.createOpportunity?.id || null;
+    }
+    await query(
+      'UPDATE leads SET twenty_person_id = $1, twenty_opportunity_id = $2 WHERE id = $3',
+      [personId, oppId, leadId]
+    );
+
+    console.log(`[TWENTY SYNC SUCCESS] lead=${leadId} -> person=${personId}, company=${companyId}, opportunity=${oppId}`);
+    return { personId, companyId, oppId };
+  } catch (err) {
+    console.error('[TWENTY SYNC ERROR]', err);
+    return null;
+  }
+}
+
   // PATCH /leads/:id/contact - Actualizar datos de contacto (email, phone, company_name)
   fastify.patch<{
     Params: { id: string };
@@ -319,6 +396,8 @@ export const leadsRoutes: FastifyPluginAsync = async (fastify) => {
        WHERE id = $6`,
       [newEmail, newPhone, newCompany, newFirst, newLast, id]
     );
+    syncToTwentyCRM(id).catch((err) => console.error('[SYNC TRIGGER ERROR]', err));
+
 
     return reply.send({
       lead_id: id,
