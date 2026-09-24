@@ -1,0 +1,178 @@
+{
+  "name": "FBS - Reenganche Automático por Inactividad",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "node-schedule-trigger",
+      "name": "Cron Cada 15 Minutos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "operation": "keys",
+        "keyPattern": "lead:activity:*",
+        "options": {}
+      },
+      "id": "node-redis-scan",
+      "name": "Redis: Buscar Leads Activos",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [300, 300],
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "fbs-redis"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatId = $json.chat_id;\nconst firstName = $json.first_name;\n\nconst text = `Hola ${firstName} 👋 ¿Sigues por ahí? Sin apuro si estás con cosas de trabajo, me avisas cuando te acomode y retomamos lo de tu marca.`;\n\ntry {\n  await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'http://twenty-bridge:3000/telegram/send',\n    body: { chat_id: chatId, action: 'typing' },\n    json: true\n  });\n} catch (e) {}\n\nawait new Promise(r => setTimeout(r, 3000));\n\nconst resData = await this.helpers.httpRequest({\n  method: 'POST',\n  url: 'http://twenty-bridge:3000/telegram/send',\n  body: { chat_id: chatId, text: text, parse_mode: 'HTML' },\n  json: true\n});\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    sent: resData?.ok,\n    message_id: resData?.result?.message_id\n  }\n}];"
+      },
+      "id": "node-split-keys",
+      "name": "Separar Claves",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "={{ $json.key }}",
+        "options": {}
+      },
+      "id": "node-redis-get-activity",
+      "name": "Redis: Leer Actividad",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [700, 300],
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "fbs-redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.value;\nif (!raw) return [];\n\ntry {\n  const data = typeof raw === 'string' ? JSON.parse(raw) : raw;\n  const now = Date.now();\n  const diffMinutes = (now - (data.timestamp || 0)) / (1000 * 60);\n\n  // Silencio entre 20 y 90 minutos, no reenganchado aún y no finalizado\n  if (diffMinutes >= 20 && diffMinutes <= 90 && !data.reengaged && !data.completed) {\n    return [{\n      json: {\n        key: $('Redis: Leer Actividad').first().json.key || `lead:activity:${data.chat_id}`,\n        chat_id: data.chat_id,\n        first_name: data.first_name || 'hola',\n        diff_minutes: Math.round(diffMinutes)\n      }\n    }];\n  }\n} catch (e) {}\n\nreturn [];"
+      },
+      "id": "node-check-inactivity",
+      "name": "¿Requiere Reenganche?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const botToken = ($env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN);\nconst chatId = $json.chat_id;\nconst firstName = $json.first_name;\n\nconst text = `Hola ${firstName} 👋 ¿Sigues por ahí? Sin apuro si estás con cosas de trabajo, me avisas cuando te acomode y retomamos lo de tu marca.`;\n\n// 1. Mostrar 'escribiendo...'\ntry {\n  await this.helpers.httpRequest({\n    method: 'POST',\n    url: `https://api.telegram.org/bot${botToken}/sendChatAction`,\n    body: { chat_id: chatId, action: 'typing' },\n    json: true\n  });\n} catch (e) {}\n\nawait new Promise(r => setTimeout(r, 3000));\n\n// 2. Enviar mensaje de reenganche\nconst resData = await this.helpers.httpRequest({\n  method: 'POST',\n  url: `https://api.telegram.org/bot${botToken}/sendMessage`,\n  body: { chat_id: chatId, text: text, parse_mode: 'HTML' },\n  json: true\n});\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    sent: resData.ok,\n    message_id: resData.result?.message_id\n  }\n}];"
+      },
+      "id": "node-send-reengage",
+      "name": "Telegram: Enviar Reenganche",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "=lead:activity:{{ $json.chat_id }}",
+        "value": "={{ JSON.stringify({ chat_id: $json.chat_id, reengaged: true, timestamp: Date.now() }) }}",
+        "options": {
+          "ttl": 86400
+        }
+      },
+      "id": "node-redis-mark-reengaged",
+      "name": "Redis: Marcar Reenganchado",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [1300, 300],
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "fbs-redis"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Cron Cada 15 Minutos": {
+      "main": [
+        [
+          {
+            "node": "Redis: Buscar Leads Activos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Buscar Leads Activos": {
+      "main": [
+        [
+          {
+            "node": "Separar Claves",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Separar Claves": {
+      "main": [
+        [
+          {
+            "node": "Redis: Leer Actividad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Leer Actividad": {
+      "main": [
+        [
+          {
+            "node": "¿Requiere Reenganche?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Requiere Reenganche?": {
+      "main": [
+        [
+          {
+            "node": "Telegram: Enviar Reenganche",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram: Enviar Reenganche": {
+      "main": [
+        [
+          {
+            "node": "Redis: Marcar Reenganchado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

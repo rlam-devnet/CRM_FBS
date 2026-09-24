@@ -439,6 +439,269 @@ async function syncToTwentyCRM(leadId: string) {
   }
 }
 
+interface DirectTwentySyncBody {
+  lead_id?: string;
+  first_name?: string;
+  last_name?: string;
+  email: string;
+  phone?: string;
+  company_name?: string;
+  job_title?: string;
+  service_needed?: string;
+  business_problem?: string;
+  decision_authority?: string;
+  investment_readiness?: string;
+  commitment_timeline?: string;
+  chat_id?: string;
+}
+
+  // POST /twenty/sync - Sincroniza atómicamente la Persona, Empresa, Trato Kanban, Nota Ejecutiva y Tarea en Twenty CRM
+  fastify.post<{ Body: DirectTwentySyncBody }>('/twenty/sync', async (request, reply) => {
+    const apiUrl = process.env.TWENTY_API_URL;
+    const apiKey = process.env.TWENTY_API_KEY;
+    if (!apiUrl || !apiKey) {
+      return reply.status(503).send({ error: 'Twenty CRM API no configurada en .env' });
+    }
+
+    const {
+      first_name = 'Prospecto',
+      last_name = '',
+      email,
+      phone,
+      company_name,
+      job_title,
+      service_needed,
+      business_problem,
+      decision_authority,
+      investment_readiness,
+      commitment_timeline,
+      chat_id,
+    } = request.body || {};
+
+    if (!email) {
+      return reply.status(400).send({ error: 'email es requerido para sincronizar a Twenty CRM' });
+    }
+
+    try {
+      let companyId: string | null = null;
+      if (company_name && company_name.trim().length > 0) {
+        const cName = company_name.trim().toLowerCase();
+        const listCompRes = await fetch(`${apiUrl}/rest/companies?limit=100`, {
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        });
+        if (listCompRes.ok) {
+          const compData = (await listCompRes.json()) as { data?: { companies?: Array<{ id: string; name?: string }> } };
+          const found = compData.data?.companies?.find(c => c.name?.trim().toLowerCase() === cName);
+          if (found) companyId = found.id;
+        }
+        if (!companyId) {
+          const createComp = await fetch(`${apiUrl}/rest/companies`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: company_name.trim() }),
+          });
+          if (createComp.ok) {
+            const compData = (await createComp.json()) as { data?: { createCompany?: { id: string } } };
+            companyId = compData.data?.createCompany?.id || null;
+          }
+        }
+      }
+
+      // 2. Crear o buscar Person
+      let personId: string | null = null;
+      const cleanEmail = email.trim().toLowerCase();
+      const listPeopleRes = await fetch(`${apiUrl}/rest/people?limit=100`, {
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+      });
+      if (listPeopleRes.ok) {
+        const pData = (await listPeopleRes.json()) as { data?: { people?: Array<{ id: string; emails?: { primaryEmail?: string; additionalEmails?: string[] } }> } };
+        const found = pData.data?.people?.find(p =>
+          p.emails?.primaryEmail?.trim().toLowerCase() === cleanEmail ||
+          p.emails?.additionalEmails?.some(e => e.trim().toLowerCase() === cleanEmail)
+        );
+        if (found) personId = found.id;
+      }
+
+      const personPayload: Record<string, unknown> = {
+        name: { firstName: first_name, lastName: last_name },
+        emails: { primaryEmail: cleanEmail },
+      };
+      if (phone) personPayload.phones = { primaryPhoneNumber: phone.trim() };
+      if (job_title) personPayload.jobTitle = job_title.trim();
+      if (companyId) personPayload.companyId = companyId;
+
+      if (!personId) {
+        const createPerson = await fetch(`${apiUrl}/rest/people`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(personPayload),
+        });
+        if (createPerson.ok) {
+          const pData = (await createPerson.json()) as { data?: { createPerson?: { id: string } } };
+          personId = pData.data?.createPerson?.id || null;
+        }
+      } else {
+        // Actualizar datos si ya existe
+        await fetch(`${apiUrl}/rest/people/${personId}`, {
+          method: 'PATCH',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...(phone ? { phones: { primaryPhoneNumber: phone.trim() } } : {}),
+            ...(job_title ? { jobTitle: job_title.trim() } : {}),
+            ...(companyId ? { companyId } : {}),
+          }),
+        });
+      }
+
+      // 3. Crear Opportunity en Kanban (Etapa 2. Reunión Agendada)
+      let oppId: string | null = null;
+      const oppName = `Branding - ${company_name || first_name}`;
+      const oppPayload: Record<string, unknown> = {
+        name: oppName,
+        amount: { amountMicros: 1200000000000, currencyCode: 'CLP' },
+        stage: 'MEETING',
+      };
+      if (companyId) oppPayload.companyId = companyId;
+      if (personId) oppPayload.pointOfContactId = personId;
+
+      const createOpp = await fetch(`${apiUrl}/rest/opportunities`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(oppPayload),
+      });
+      if (createOpp.ok) {
+        const oData = (await createOpp.json()) as { data?: { createOpportunity?: { id: string } } };
+        oppId = oData.data?.createOpportunity?.id || null;
+      }
+
+      // 4. Crear Nota Ejecutiva vinculada al Trato y a la Persona
+      if (oppId || personId) {
+        const noteMarkdown = `### Briefing Ejecutivo de Calificación (FBS Studio)
+* **Cliente:** ${first_name} ${last_name}
+* **Cargo / Rol:** ${job_title || 'Socio / Fundador'}
+* **Empresa:** ${company_name || 'Agencia'}
+* **Email:** ${cleanEmail}
+* **Teléfono:** ${phone || 'No indicado'}
+* **Servicio Solicitado:** ${service_needed || 'Branding integral'}
+* **Desafío Comercial:** ${business_problem || 'Consolidación de marca'}
+* **Decisor:** ${decision_authority || 'Socio / Fundador'}
+* **Inversión Estimada:** ${investment_readiness || 'Acepta piso $1.200.000 CLP'}
+* **Disponibilidad Videollamada:** ${commitment_timeline || 'Próxima semana'}
+* **Agenda Cal.com:** https://cal.com/fbs-studio/consulta-30min?chat_id=${chat_id || ''}`;
+
+        const createNote = await fetch(`${apiUrl}/rest/notes`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: `Briefing Estratégico — ${company_name || first_name}`,
+            bodyV2: { markdown: noteMarkdown },
+          }),
+        });
+
+        if (createNote.ok) {
+          const nData = (await createNote.json()) as { data?: { createNote?: { id: string } } };
+          const noteId = nData.data?.createNote?.id;
+          if (noteId && oppId) {
+            await fetch(`${apiUrl}/rest/noteTargets`, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ noteId, targetOpportunityId: oppId }),
+            });
+          }
+        }
+
+        // 5. Crear Tarea para el Closer vinculada al Trato
+        if (oppId) {
+          const createTask = await fetch(`${apiUrl}/rest/tasks`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              title: `Revisar respuestas de formulario pre-llamada antes del Meet con ${first_name}`,
+              status: 'TODO',
+              dueAt: new Date(Date.now() + 86400000 * 2).toISOString(),
+            }),
+          });
+          if (createTask.ok) {
+            const tData = (await createTask.json()) as { data?: { createTask?: { id: string } } };
+            const taskId = tData.data?.createTask?.id;
+            if (taskId) {
+              await fetch(`${apiUrl}/rest/taskTargets`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ taskId, targetOpportunityId: oppId }),
+              });
+            }
+          }
+        }
+      }
+
+      console.log(`[DIRECT TWENTY SYNC] email=${cleanEmail} -> person=${personId}, company=${companyId}, opportunity=${oppId}`);
+      return reply.send({
+        status: 'ok',
+        person_id: personId,
+        company_id: companyId,
+        opportunity_id: oppId,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[DIRECT TWENTY SYNC ERROR]', msg);
+      return reply.status(500).send({ error: msg });
+    }
+  });
+
+  // POST /telegram/send - Despacha mensajes o acciones (typing) a Telegram sin exponer el token
+  fastify.post<{
+    Body: {
+      chat_id: string | number;
+      text?: string;
+      action?: string;
+      parse_mode?: string;
+    };
+  }>('/telegram/send', async (request, reply) => {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) {
+      return reply.status(500).send({ error: 'TELEGRAM_BOT_TOKEN no configurado en .env' });
+    }
+
+    const { chat_id, text, action, parse_mode = 'HTML' } = request.body || {};
+    if (!chat_id) {
+      return reply.status(400).send({ error: 'chat_id es requerido' });
+    }
+
+    if (action) {
+      try {
+        await fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id, action }),
+        });
+      } catch (err) {}
+    }
+
+    if (text) {
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id,
+            text,
+            parse_mode,
+            disable_web_page_preview: false,
+          }),
+        });
+        const resData = await res.json();
+        return reply.send(resData);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return reply.status(502).send({ error: msg });
+      }
+    }
+
+    return reply.send({ ok: true });
+  });
+
+
   // PATCH /leads/:id/contact - Actualizar datos de contacto (email, phone, company_name)
   fastify.patch<{
     Params: { id: string };

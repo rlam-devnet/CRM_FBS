@@ -20,11 +20,26 @@ services:
     networks:
       - default
 
-  crm-api:
+  fbs-redis:
+    image: redis:alpine
+    container_name: fbs-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "no", "--maxmemory", "50mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+    networks:
+      - default
+
+  twenty-bridge:
     build:
       context: ./api
       dockerfile: Dockerfile
-    container_name: fbs-crm-api
+    container_name: fbs-twenty-bridge
     restart: unless-stopped
     environment:
       PORT: 3000
@@ -34,11 +49,10 @@ services:
       PGUSER: fbs_admin
       PGPASSWORD: fbs_secret_password_2026
       PGDATABASE: fbs_crm
-      NODE_ENV: production
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      DEBOUNCE_MS: 6500
-      TWENTY_API_URL: ${TWENTY_API_URL:-http://twenty-server:3000}
+      TWENTY_API_URL: http://twenty-server:3000
       TWENTY_API_KEY: ${TWENTY_API_KEY}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      NODE_ENV: production
     ports:
       - "3000:3000"
     depends_on:

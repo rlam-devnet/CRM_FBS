@@ -12,109 +12,219 @@
       "name": "Webhook Telegram Ingress",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [100, 200],
-      "webhookId": "fbs-telegram-ingress"
+      "position": [100, 300]
     },
     {
       "parameters": {
-        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst message = body.message || body.channel_post || {};\nconst from = message.from || {};\nconst chat = message.chat || {};\n\nif (!message.text && !message.voice) {\n  return [{ json: { ignore: true, reason: 'No text or voice message' } }];\n}\n\nreturn [{\n  json: {\n    ignore: false,\n    telegram_id: String(from.id || chat.id),\n    chat_id: String(chat.id),\n    first_name: from.first_name || '',\n    last_name: from.last_name || '',\n    username: from.username || '',\n    text: (message.text || '').trim(),\n    message_id: String(message.message_id),\n    date: message.date,\n    is_voice: !!message.voice\n  }\n}];"
+        "jsCode": "const chatId = $json.chat_id;\nconst bubbles = $json.bubbles || [];\n\nconst sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));\nconst sendResults = [];\n\nfor (let i = 0; i < bubbles.length; i++) {\n  const bubbleText = bubbles[i];\n  if (!bubbleText || bubbleText.trim().length === 0) continue;\n\n  // 1. Mostrar 'escribiendo...' en Telegram\n  try {\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'http://twenty-bridge:3000/telegram/send',\n      body: {\n        chat_id: chatId,\n        action: 'typing'\n      },\n      json: true\n    });\n  } catch (e) {}\n\n  // 2. Pausa humana de 3.5 segundos\n  await sleep(3500);\n\n  // 3. Enviar burbuja de texto\n  try {\n    const resData = await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'http://twenty-bridge:3000/telegram/send',\n      body: {\n        chat_id: chatId,\n        text: bubbleText,\n        parse_mode: 'HTML'\n      },\n      json: true\n    });\n    sendResults.push({ bubble_index: i, ok: resData?.ok, message_id: resData?.result?.message_id });\n  } catch (err) {\n    sendResults.push({ bubble_index: i, ok: false, error: err.message });\n  }\n}\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    bubbles_sent: sendResults.length,\n    results: sendResults\n  }\n}];"
       },
-      "id": "node-normalizer-telegram",
+      "id": "node-normalize",
       "name": "Normalizar Payload Telegram",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [300, 200]
+      "position": [300, 300]
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "http://crm-api:3000/webhook/buffer",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ chat_id: $json.chat_id, telegram_id: $json.telegram_id, first_name: $json.first_name, last_name: $json.last_name, text: $json.text, message_id: $json.message_id }) }}",
+        "operation": "get",
+        "key": "=chat_buffer:{{ $json.chat_id }}",
         "options": {}
       },
-      "id": "node-buffer-crm",
-      "name": "Buffer en CRM API",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [520, 200]
-    },
-    {
-      "parameters": {
-        "httpMethod": "POST",
-        "path": "fbs-process-message",
-        "responseMode": "onReceived",
-        "options": {}
-      },
-      "id": "node-webhook-processor",
-      "name": "Webhook Processor Ingress",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
-      "position": [100, 480],
-      "webhookId": "fbs-process-message-ingress"
-    },
-    {
-      "parameters": {
-        "jsCode": "const raw = $input.first().json;\nconst body = raw.body || raw;\nreturn [{\n  json: {\n    chat_id: String(body.chat_id || body.telegram_id),\n    telegram_id: String(body.telegram_id || body.chat_id),\n    first_name: body.first_name || '',\n    last_name: body.last_name || '',\n    text: (body.text || '').trim()\n  }\n}];"
-      },
-      "id": "node-normalizer-processor",
-      "name": "Normalizar Processor Input",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [300, 480]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "http://crm-api:3000/leads",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ telegram_id: $json.telegram_id, channel: 'telegram', first_name: $json.first_name, last_name: $json.last_name }) }}",
-        "options": {}
-      },
-      "id": "node-crm-dedupe",
-      "name": "Consultar/Crear Lead en CRM API",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [500, 480]
-    },
-    {
-      "parameters": {
-        "method": "GET",
-        "url": "=http://crm-api:3000/leads/{{ $json.lead_id }}",
-        "options": {}
-      },
-      "id": "node-fetch-lead-details",
-      "name": "Obtener Snapshot Completo Lead",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [700, 480]
-    },
-    {
-      "parameters": {
-        "promptType": "define",
-        "text": "={{ $('Normalizar Processor Input').first().json.text }}",
-        "options": {
-          "systemMessage": "=Eres el asistente conversacional oficial de Fernández Briceño Studio (FBS), un estudio de branding estratégico y diseño en Chile.\nConversas por Telegram con {{ $('Normalizar Processor Input').first().json.first_name || 'el cliente' }}.\nTu misión es calificar al prospecto y coordinar una videollamada estratégica de 30 min (sin costo).\n\nDIRECTIVAS INVIOLABLES DE ROL Y TONO:\n1. Formato de respuesta: Divide SIEMPRE tu mensaje en 2 o 3 párrafos cortos separados por doble salto de línea (\\n\\n), simulando burbujas de chat. Cada párrafo debe tener máximo 1 a 2 líneas.\n2. Tono: Tuteo latino/chileno natural, empático, profesional y cercano. Usa emojis profesionales (👋, ✨, 👌, 🎯, 🚀, 🗓️, 🙌).\n3. Cero lenguaje robótico: PROHIBIDO decir \"procesando\", \"gracias por responder\", \"consulta registrada\", etc.\n4. REGLA DE MEMORIA: Tienes acceso a toda la conversación previa. NUNCA repitas una pregunta que ya hiciste o que el usuario ya respondió en turnos anteriores.\n\nGUION CONVERSACIONAL DE 4 PREGUNTAS (P1 a P4):\n- P1 (Servicio): Qué necesitan trabajar (marca desde cero, rebranding, identidad visual, arquitectura de marca, brand book, naming, o marca + espacio físico). Si ya lo mencionó en su saludo, acúsalo y pasa directo a P2.\n- P2 (Negocio y Problema): A qué se dedica su empresa y qué problema principal u objetivo buscan resolver con este proyecto.\n- P3A (Decisor): Quién toma la decisión final (solo, con socios, aprueba alguien más).\n- P3B (Inversión): Nuestros proyectos de marca parten desde $1.200.000 CLP. ¿Ese rango les hace sentido para lo que tienen contemplado?\n  * Si el usuario dice que se sale un poco o pregunta qué incluye: Explícale con calidez lo que abarca el servicio y pregúntale si les gustaría coordinar la videollamada estratégica de 30 min (sin costo) para ver cómo adaptar el alcance.\n- P4 (Compromiso): Coordinar la videollamada esta semana o la próxima.\n\nHERRAMIENTAS:\n- Llama a `actualizar_calificacion_crm` en cuanto el usuario revele información sobre servicio, problema, decisor o presupuesto.\n- Cuando el cliente acepte coordinar la videollamada: ¡Felicítalo por el encaje y pídele su correo corporativo y un teléfono de contacto para enviarle la invitación formal de Google Meet!\n- Cuando el cliente te dé su correo y teléfono:\n  1. Llama a `guardar_datos_contacto` con su email y teléfono.\n  2. Entrégale el enlace de la agenda para que elija día y hora: https://cal.com/fbs-studio/consulta-30min?lead_id={{ $('Consultar/Crear Lead en CRM API').first().json.lead_id }}\n- Si el cliente te da las gracias o dice \"ok / muchas gracias / perfecto / vale\":\n  Respóndele con amabilidad: \"¡De nada! Quedo súper atento ✨ Elige tu horario con calma en el enlace y cualquier duda me avisas por acá. ¡Que tengas un excelente día! 🙌\"\n  ¡Y NUNCA vuelvas a preguntarle si quiere una reunión ni le repitas el enlace!"
+      "id": "node-redis-get-buffer",
+      "name": "Redis: Obtener Buffer Previo",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [500, 300],
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "FBS Redis Aislado"
         }
       },
-      "id": "node-ai-agent",
-      "name": "AI Agent FBS",
-      "type": "@n8n/n8n-nodes-langchain.agent",
-      "typeVersion": 1.7,
-      "position": [940, 480]
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const prevBuffer = $json.propertyName || $json.value || '';\nconst incomingText = $('Normalizar Payload Telegram').first().json.text;\nconst chatId = $('Normalizar Payload Telegram').first().json.chat_id;\nconst firstName = $('Normalizar Payload Telegram').first().json.first_name;\nconst lastName = $('Normalizar Payload Telegram').first().json.last_name;\nconst username = $('Normalizar Payload Telegram').first().json.username;\nconst executionId = $('Normalizar Payload Telegram').first().json.execution_id;\n\nconst newBuffer = prevBuffer ? `${prevBuffer} \\n ${incomingText}` : incomingText;\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    buffer: newBuffer,\n    incoming_text: incomingText,\n    first_name: firstName,\n    last_name: lastName,\n    username: username,\n    execution_id: executionId\n  }\n}];"
+      },
+      "id": "node-concat",
+      "name": "Concatenar Ráfaga",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "=chat_buffer:{{ $json.chat_id }}",
+        "value": "={{ $json.buffer }}",
+        "options": {
+          "ttl": 120
+        }
+      },
+      "id": "node-redis-save-buffer",
+      "name": "Redis: Guardar Buffer",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [900, 300],
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "FBS Redis Aislado"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "=chat_lock:{{ $('Concatenar Ráfaga').first().json.chat_id }}",
+        "value": "={{ $('Concatenar Ráfaga').first().json.execution_id }}",
+        "options": {
+          "ttl": 60
+        }
+      },
+      "id": "node-redis-set-lock",
+      "name": "Redis: Set Debounce Lock",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [1100, 300],
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "FBS Redis Aislado"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 15,
+        "unit": "seconds"
+      },
+      "id": "node-wait",
+      "name": "Wait 15s (Ventana Silencio)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1300, 300],
+      "webhookId": "f90df265-d602-4752-bd8a-928549646b9a"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "=chat_lock:{{ $('Concatenar Ráfaga').first().json.chat_id }}",
+        "options": {}
+      },
+      "id": "node-redis-get-lock",
+      "name": "Redis: Get Lock Tras Espera",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [1500, 300],
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "FBS Redis Aislado"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-lock-check",
+              "leftValue": "={{ $json.propertyName || $json.value }}",
+              "rightValue": "={{ $('Concatenar Ráfaga').first().json.execution_id }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-check-lock",
+      "name": "¿Es el Último Mensaje de la Ráfaga?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1700, 300]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "=chat_buffer:{{ $('Concatenar Ráfaga').first().json.chat_id }}",
+        "options": {}
+      },
+      "id": "node-redis-fetch-all",
+      "name": "Redis: Recuperar Texto Completo",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [1900, 200],
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "FBS Redis Aislado"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "key": "=chat_buffer:{{ $('Concatenar Ráfaga').first().json.chat_id }}",
+        "options": {}
+      },
+      "id": "node-redis-clear-buffer",
+      "name": "Redis: Limpiar Buffer",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [2100, 200],
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "FBS Redis Aislado"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const completeText = $('Redis: Recuperar Texto Completo').first().json.propertyName || $('Redis: Recuperar Texto Completo').first().json.value || $('Concatenar Ráfaga').first().json.incoming_text;\nconst chatId = $('Concatenar Ráfaga').first().json.chat_id;\nconst firstName = $('Concatenar Ráfaga').first().json.first_name;\nconst lastName = $('Concatenar Ráfaga').first().json.last_name;\nconst username = $('Concatenar Ráfaga').first().json.username;\n\nreturn [{\n  json: {\n    sessionId: chatId,\n    chat_id: chatId,\n    input: completeText,\n    first_name: firstName,\n    last_name: lastName,\n    username: username\n  }\n}];"
+      },
+      "id": "node-prepare-input",
+      "name": "Preparar Input para AI Agent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2300, 200]
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Preparar Input para AI Agent').first().json.chat_id }}",
+        "contextWindowLength": 20
+      },
+      "id": "node-memory",
+      "name": "Window Buffer Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [2500, 420]
     },
     {
       "parameters": {
         "modelName": "models/gemini-2.5-flash",
-        "options": {}
+        "options": {
+          "temperature": 0.2
+        }
       },
-      "id": "node-gemini-chat-model",
+      "id": "node-gemini",
       "name": "Google Gemini Chat Model",
       "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
       "typeVersion": 1,
-      "position": [880, 680],
+      "position": [2400, 420],
       "credentials": {
         "googlePalmApi": {
           "id": "HGA4oBsMOuXPhO7N",
@@ -124,67 +234,109 @@
     },
     {
       "parameters": {
-        "sessionIdType": "customKey",
-        "sessionKey": "={{ $('Normalizar Processor Input').first().json.chat_id }}",
-        "contextWindowLength": 20
-      },
-      "id": "node-memory-buffer-window",
-      "name": "Window Buffer Memory",
-      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
-      "typeVersion": 1.3,
-      "position": [1020, 680]
-    },
-    {
-      "parameters": {
-        "name": "actualizar_calificacion_crm",
-        "description": "Llama a esta herramienta para guardar los datos de calificación del prospecto en el CRM.",
+        "toolDescription": "Sincroniza y guarda los datos del prospecto y la oportunidad calificada directamente en Twenty CRM cuando el cliente proporcione su correo corporativo, telefono o nombre de empresa.",
         "method": "POST",
-        "url": "=http://crm-api:3000/leads/{{ $('Consultar/Crear Lead en CRM API').first().json.lead_id }}/qualification/batch"
+        "url": "http://twenty-bridge:3000/twenty/sync",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "parametersHeaders": {
+          "values": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"first_name\": \"{first_name}\",\n  \"last_name\": \"{last_name}\",\n  \"email\": \"{email}\",\n  \"phone\": \"{phone}\",\n  \"company_name\": \"{company_name}\",\n  \"job_title\": \"{job_title}\",\n  \"service_needed\": \"{service_needed}\",\n  \"business_problem\": \"{business_problem}\",\n  \"decision_authority\": \"{decision_authority}\",\n  \"investment_readiness\": \"{investment_readiness}\",\n  \"commitment_timeline\": \"{commitment_timeline}\",\n  \"chat_id\": \"{chat_id}\"\n}",
+        "placeholderDefinitions": {
+          "values": [
+            { "name": "first_name", "description": "Nombre de pila del prospecto", "type": "string" },
+            { "name": "last_name", "description": "Apellido del prospecto", "type": "string" },
+            { "name": "email", "description": "Correo corporativo del prospecto", "type": "string" },
+            { "name": "phone", "description": "Teléfono o WhatsApp de contacto", "type": "string" },
+            { "name": "company_name", "description": "Nombre de la empresa o proyecto", "type": "string" },
+            { "name": "job_title", "description": "Cargo o rol del prospecto (ej: Fundador, Co-fundador, Gerente)", "type": "string" },
+            { "name": "service_needed", "description": "Servicio de branding específico solicitado", "type": "string" },
+            { "name": "business_problem", "description": "Desafío comercial o dolor a resolver", "type": "string" },
+            { "name": "decision_authority", "description": "Quién toma la decisión final", "type": "string" },
+            { "name": "investment_readiness", "description": "Validación del piso de inversión ($1.200.000 CLP)", "type": "string" },
+            { "name": "commitment_timeline", "description": "Disponibilidad para la videollamada", "type": "string" },
+            { "name": "chat_id", "description": "ID de chat de Telegram", "type": "string" }
+          ]
+        }
       },
-      "id": "node-tool-crm",
-      "name": "Tool Calificación CRM",
+      "id": "node-tool-twenty",
+      "name": "Tool Sincronizar Twenty CRM",
       "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
       "typeVersion": 1.1,
-      "position": [1160, 680]
+      "position": [2650, 420]
     },
     {
       "parameters": {
-        "name": "guardar_datos_contacto",
-        "description": "Llama a esta herramienta cuando el cliente comparta su correo corporativo, teléfono de contacto o nombre de empresa.",
-        "method": "PATCH",
-        "url": "=http://crm-api:3000/leads/{{ $('Consultar/Crear Lead en CRM API').first().json.lead_id }}/contact"
+        "promptType": "define",
+        "text": "={{ $json.input }}",
+        "options": {
+          "systemMessage": "Eres el Asesor Comercial de FBS Studio (fbs.studio), consultora boutique de branding y diseño estratégico en Chile. Conversas por Telegram con {{ $json.first_name || 'el cliente' }}.\nTu única meta es calificar al prospecto de forma natural y agendar una videollamada estratégica de 30 minutos sin costo con nuestro Director Creativo.\n\nREGLAS DE ORO INVIOLABLES (MÁXIMA PRIORIDAD):\n1. BREVEDAD RADICAL: Cada mensaje debe tener MÁXIMO 1 a 2 líneas cortas (menos de 20 palabras por mensaje). Habla exactamente como una persona real en WhatsApp/Telegram. Cero párrafos largos.\n2. CERO CÁTEDRAS DE BRANDING: Prohibido explicar qué es branding, qué incluye la identidad visual o dar lecciones teóricas. Si el cliente pregunta qué es un servicio, responde en 1 sola frase corta y continúa.\n3. ESTRICTAMENTE UNA SOLA PREGUNTA POR TURNO: Jamás hagas dos preguntas juntas.\n   - Si preguntas quién toma la decisión, NO menciones el presupuesto.\n   - Solo en el siguiente turno, cuando el cliente ya te haya dicho quién decide, presentas el presupuesto.\n4. NUNCA REPETIR EL PRESUPUESTO: Si el cliente ya mencionó el precio, el presupuesto o aceptó evaluarlo en una reunión, NUNCA vuelvas a decir que parten desde $1.200.000 CLP. Pasa directo a coordinar la videollamada.\n5. CALMA Y RITMO: Conduce la conversación paso a paso, sin apuro ni mensajes mecánicos.\n\nPASOS DE LA CONVERSACIÓN:\n- Paso 1 (Contexto & Servicio): Identifica qué busca la empresa (branding desde cero, rebranding, arquitectura de marca, etc.).\n- Paso 2 (Decisores): Pregunta SOLO: \"¿Quiénes toman la decisión final en tu equipo?\" (Espera su respuesta).\n- Paso 3 (Presupuesto): Cuando ya sepas quién decide, di: \"Nuestros proyectos suelen partir desde $1.200.000 CLP. ¿Ese rango les hace sentido para lo que tienen contemplado?\" (Espera su respuesta).\n- Paso 4 (Coordinación de Agenda): Si acepta el rango o dice que lo evalúan en reunión, di: \"¡De todas maneras! En la reunión revisamos el alcance en detalle. Para enviarte la invitación a Google Meet, ¿me compartes tu correo corporativo y WhatsApp?\"\n- Paso 5 (Entrega de Link Cal.com): En cuanto comparta correo y WhatsApp, confirma que guardaste sus datos y comparte el enlace de agenda: https://cal.com/fbs-studio/consulta-30min?chat_id={{ $json.chat_id }}\n\nHERRAMIENTA TWENTY CRM:\nEn cuanto el cliente te comparta su correo y teléfono, debes llamar a la herramienta `Tool Sincronizar Twenty CRM` enviando todos los datos recopilados (first_name, last_name, email, phone, company_name, job_title, service_needed, business_problem, decision_authority, investment_readiness, commitment_timeline, chat_id)."
+        }
       },
-      "id": "node-tool-contact",
-      "name": "Tool Contacto CRM",
-      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
-      "typeVersion": 1.1,
-      "position": [1300, 680]
+      "id": "node-agent",
+      "name": "AI Agent FBS",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [2500, 200]
     },
     {
       "parameters": {
-        "jsCode": "const outputText = $input.first().json.output || '';\nconst chatId = $('Normalizar Processor Input').first().json.chat_id;\n\n// Dividir por doble salto de línea en burbujas separadas\nconst bubbles = outputText\n  .split(/\\n\\n+/)\n  .map(s => s.trim())\n  .filter(Boolean);\n\nconst messages = bubbles.length > 0 ? bubbles : [outputText.trim()];\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    messages: messages\n  }\n}];"
+        "jsCode": "const rawOutput = ($json.output || '').trim();\nconst chatId = $('Preparar Input para AI Agent').first().json.chat_id;\nconst firstName = $('Preparar Input para AI Agent').first().json.first_name || 'Prospecto';\nconst userInput = $('Preparar Input para AI Agent').first().json.input || '';\nconst calLink = `https://cal.com/fbs-studio/consulta-30min?chat_id=${chatId}`;\n\n// 1. Detectar si el usuario aportó un correo en este turno o en el buffer\nconst emailRegex = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})/i;\nconst phoneRegex = /(\\+?\\d[\\d\\s-]{7,}\\d)/;\nconst emailMatch = userInput.match(emailRegex);\nconst phoneMatch = userInput.match(phoneRegex);\n\nlet finalText = rawOutput;\n\n// 2. Fail-Safe Anti-Silencio: si el modelo generó output vacío\nif (!finalText || finalText.length < 5) {\n  if (emailMatch) {\n    finalText = `¡Listo, ${firstName}! Ya dejé registrados tus datos en nuestro sistema 👌\\n\\nAquí tienes el enlace para agendar nuestra videollamada estratégica de 30 minutos: ${calLink}\\n\\n¡Nos vemos en la videollamada para conversar sobre tu proyecto!`;\n  } else {\n    finalText = `¡Entendido, ${firstName}! Cuéntame un poco más sobre eso para orientarte mejor.`;\n  }\n}\n\n// 3. Limpiar anotaciones de herramientas residuales\nfinalText = finalText.replace(/`actualizar_calificacion_crm[\\s\\S]*?`/gi, '');\nfinalText = finalText.replace(/`sincronizar_twenty_crm[\\s\\S]*?`/gi, '');\nfinalText = finalText.replace(/\\[RUN\\]/gi, '');\nfinalText = finalText.trim();\n\n// 4. Formatear en burbujas cortas y naturales (máximo 1-2 líneas por burbuja)\nconst rawBubbles = finalText.split(/\\n\\s*\\n/).map(b => b.trim()).filter(b => b.length > 0);\nconst bubbles = [];\n\nfor (const b of rawBubbles) {\n  if (b.length > 160) {\n    const sub = b.split(/(?<=[.?!])\\s+/);\n    let current = '';\n    for (const s of sub) {\n      if ((current + ' ' + s).trim().length > 120 && current.length > 0) {\n        bubbles.push(current.trim());\n        current = s;\n      } else {\n        current = current ? `${current} ${s}` : s;\n      }\n    }\n    if (current.trim().length > 0) bubbles.push(current.trim());\n  } else {\n    bubbles.push(b);\n  }\n}\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    bubbles: bubbles.length > 0 ? bubbles : [finalText],\n    detected_email: emailMatch ? emailMatch[1] : null,\n    detected_phone: phoneMatch ? phoneMatch[1] : null,\n    first_name: firstName,\n    user_input: userInput\n  }\n}];"
       },
       "id": "node-format-bubbles",
       "name": "Formatear Burbujas",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1260, 480]
+      "position": [2800, 200]
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "http://crm-api:3000/telegram/send-multi",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ chat_id: $json.chat_id, messages: $json.messages }) }}",
-        "options": {}
+        "jsCode": "const detectedEmail = $json.detected_email;\nconst detectedPhone = $json.detected_phone;\nconst chatId = $json.chat_id;\nconst firstName = $json.first_name;\nconst userInput = $json.user_input;\n\n// Si se detectó un correo en la interacción y no se llamó la tool, asegurar la sincronización\nif (detectedEmail) {\n  try {\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'http://twenty-bridge:3000/twenty/sync',\n      body: {\n        first_name: firstName,\n        email: detectedEmail,\n        phone: detectedPhone || '',\n        chat_id: chatId,\n        service_needed: 'Branding / Arquitectura de marca',\n        business_problem: userInput\n      },\n      json: true\n    });\n  } catch (err) {}\n}\n\nreturn [{ json: $json }];"
       },
-      "id": "node-telegram-send-multi",
-      "name": "Enviar Burbujas a Telegram",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [1480, 480],
-      "onError": "continueRegularOutput"
+      "id": "node-twenty-guard",
+      "name": "Guardia de Sincronización Twenty",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3000, 200]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "=lead:activity:{{ $json.chat_id }}",
+        "value": "={{ JSON.stringify({ chat_id: $json.chat_id, first_name: $json.first_name, timestamp: Date.now(), reengaged: false }) }}",
+        "options": {
+          "ttl": 86400
+        }
+      },
+      "id": "node-redis-activity",
+      "name": "Redis: Registrar Actividad Lead",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [3150, 200],
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "FBS Redis Aislado"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const botToken = ($env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN);\nconst chatId = $json.chat_id;\nconst bubbles = $json.bubbles || [];\n\nconst sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));\nconst sendResults = [];\n\nfor (let i = 0; i < bubbles.length; i++) {\n  const bubbleText = bubbles[i];\n  if (!bubbleText || bubbleText.trim().length === 0) continue;\n\n  // 1. Mostrar 'escribiendo...' en Telegram\n  try {\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: `https://api.telegram.org/bot${botToken}/sendChatAction`,\n      body: {\n        chat_id: chatId,\n        action: 'typing'\n      },\n      json: true\n    });\n  } catch (e) {}\n\n  // 2. Pausa humana de 3.5 segundos (ritmo pausado y natural)\n  await sleep(3500);\n\n  // 3. Enviar burbuja de texto\n  try {\n    const resData = await this.helpers.httpRequest({\n      method: 'POST',\n      url: `https://api.telegram.org/bot${botToken}/sendMessage`,\n      body: {\n        chat_id: chatId,\n        text: bubbleText,\n        parse_mode: 'HTML',\n        disable_web_page_preview: false\n      },\n      json: true\n    });\n    sendResults.push({ bubble_index: i, ok: resData?.ok, message_id: resData?.result?.message_id });\n  } catch (err) {\n    sendResults.push({ bubble_index: i, ok: false, error: err.message });\n  }\n}\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    bubbles_sent: sendResults.length,\n    results: sendResults\n  }\n}];"
+      },
+      "id": "node-send-telegram",
+      "name": "Telegram Send Multi Nativo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3350, 200]
     }
   ],
   "connections": {
@@ -203,63 +355,118 @@
       "main": [
         [
           {
-            "node": "Buffer en CRM API",
+            "node": "Redis: Obtener Buffer Previo",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Webhook Processor Ingress": {
+    "Redis: Obtener Buffer Previo": {
       "main": [
         [
           {
-            "node": "Normalizar Processor Input",
+            "node": "Concatenar Ráfaga",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Normalizar Processor Input": {
+    "Concatenar Ráfaga": {
       "main": [
         [
           {
-            "node": "Consultar/Crear Lead en CRM API",
+            "node": "Redis: Guardar Buffer",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Consultar/Crear Lead en CRM API": {
+    "Redis: Guardar Buffer": {
       "main": [
         [
           {
-            "node": "Obtener Snapshot Completo Lead",
+            "node": "Redis: Set Debounce Lock",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Obtener Snapshot Completo Lead": {
+    "Redis: Set Debounce Lock": {
+      "main": [
+        [
+          {
+            "node": "Wait 15s (Ventana Silencio)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 15s (Ventana Silencio)": {
+      "main": [
+        [
+          {
+            "node": "Redis: Get Lock Tras Espera",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Get Lock Tras Espera": {
+      "main": [
+        [
+          {
+            "node": "¿Es el Último Mensaje de la Ráfaga?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es el Último Mensaje de la Ráfaga?": {
+      "main": [
+        [
+          {
+            "node": "Redis: Recuperar Texto Completo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Recuperar Texto Completo": {
+      "main": [
+        [
+          {
+            "node": "Redis: Limpiar Buffer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Limpiar Buffer": {
+      "main": [
+        [
+          {
+            "node": "Preparar Input para AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Input para AI Agent": {
       "main": [
         [
           {
             "node": "AI Agent FBS",
             "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Google Gemini Chat Model": {
-      "ai_languageModel": [
-        [
-          {
-            "node": "AI Agent FBS",
-            "type": "ai_languageModel",
             "index": 0
           }
         ]
@@ -276,18 +483,18 @@
         ]
       ]
     },
-    "Tool Calificación CRM": {
-      "ai_tool": [
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
         [
           {
             "node": "AI Agent FBS",
-            "type": "ai_tool",
+            "type": "ai_languageModel",
             "index": 0
           }
         ]
       ]
     },
-    "Tool Contacto CRM": {
+    "Tool Sincronizar Twenty CRM": {
       "ai_tool": [
         [
           {
@@ -313,7 +520,29 @@
       "main": [
         [
           {
-            "node": "Enviar Burbujas a Telegram",
+            "node": "Guardia de Sincronización Twenty",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardia de Sincronización Twenty": {
+      "main": [
+        [
+          {
+            "node": "Redis: Registrar Actividad Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Registrar Actividad Lead": {
+      "main": [
+        [
+          {
+            "node": "Telegram Send Multi Nativo",
             "type": "main",
             "index": 0
           }
