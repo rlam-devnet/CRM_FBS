@@ -35,7 +35,7 @@ services:
       PGPASSWORD: fbs_secret_password_2026
       PGDATABASE: fbs_crm
       NODE_ENV: production
-      TELEGRAM_BOT_TOKEN: 8817198126:AAHreDqi1CWBBIYzZBMfir-VB7jUkxLUQ8s
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       DEBOUNCE_MS: 6500
       TWENTY_API_URL: ${TWENTY_API_URL:-http://twenty-server:3000}
       TWENTY_API_KEY: ${TWENTY_API_KEY}
