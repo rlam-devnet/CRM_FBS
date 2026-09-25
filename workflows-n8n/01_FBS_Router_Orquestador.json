@@ -45,7 +45,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const prevBuffer = $json.propertyName || $json.value || '';\nconst incomingText = $('Normalizar Payload Telegram').first().json.text;\nconst chatId = $('Normalizar Payload Telegram').first().json.chat_id;\nconst firstName = $('Normalizar Payload Telegram').first().json.first_name;\nconst lastName = $('Normalizar Payload Telegram').first().json.last_name;\nconst username = $('Normalizar Payload Telegram').first().json.username;\nconst executionId = $('Normalizar Payload Telegram').first().json.execution_id;\n\nconst newBuffer = prevBuffer ? `${prevBuffer} \\n ${incomingText}` : incomingText;\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    buffer: newBuffer,\n    incoming_text: incomingText,\n    first_name: firstName,\n    last_name: lastName,\n    username: username,\n    execution_id: executionId\n  }\n}];"
+        "jsCode": "const prev = $('Redis: Obtener Buffer Previo').first()?.json?.propertyName || $('Redis: Obtener Buffer Previo').first()?.json?.value || '';\nconst norm = $('Normalizar Payload Telegram').first()?.json || {};\nconst incomingText = String(norm.text || '');\nconst chatId = String(norm.chat_id || '');\nconst firstName = norm.first_name || 'Prospecto';\nconst lastName = norm.last_name || '';\nconst username = norm.username || '';\nconst executionId = norm.execution_id || String(Date.now());\n\nconst newBuffer = prev ? `${prev}\\n${incomingText}` : incomingText;\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    buffer: String(newBuffer || ''),\n    incoming_text: incomingText,\n    first_name: firstName,\n    last_name: lastName,\n    username: username,\n    execution_id: executionId\n  }\n}];"
       },
       "id": "node-concat",
       "name": "Concatenar Ráfaga",
@@ -58,6 +58,7 @@
         "operation": "set",
         "key": "=chat_buffer:{{ $json.chat_id }}",
         "value": "={{ $json.buffer }}",
+        "keyType": "string",
         "options": {
           "ttl": 120
         }
@@ -79,11 +80,11 @@
         "operation": "set",
         "key": "=chat_lock:{{ $('Concatenar Ráfaga').first().json.chat_id }}",
         "value": "={{ $('Concatenar Ráfaga').first().json.execution_id }}",
+        "keyType": "string",
         "options": {
           "ttl": 60
         }
       },
-      "id": "node-redis-set-lock",
       "name": "Redis: Set Debounce Lock",
       "type": "n8n-nodes-base.redis",
       "typeVersion": 1,
@@ -312,6 +313,7 @@
         "operation": "set",
         "key": "=lead:activity:{{ $json.chat_id }}",
         "value": "={{ JSON.stringify({ chat_id: $json.chat_id, first_name: $json.first_name, timestamp: Date.now(), reengaged: false }) }}",
+        "keyType": "string",
         "options": {
           "ttl": 86400
         }
