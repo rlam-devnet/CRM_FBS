@@ -1,0 +1,1499 @@
+{
+  "id": "jDdqrMXiJzKgsAE2",
+  "name": "FBS - Orquestador y Router Telegram V2",
+  "description": null,
+  "active": true,
+  "activeVersionId": "085ead52-6d45-4b3e-921b-b04daeba3f18",
+  "createdAt": "2026-09-25T00:46:02.333Z",
+  "updatedAt": "2026-09-25T01:09:05.534Z",
+  "isArchived": false,
+  "versionId": "085ead52-6d45-4b3e-921b-b04daeba3f18",
+  "versionCounter": 10,
+  "sourceWorkflowId": null,
+  "triggerCount": 1,
+  "nodes": [
+    {
+      "id": "6a08f499-abe8-4ed8-9d72-0dc212073ffb",
+      "name": "Webhook Telegram Ingress",
+      "webhookId": "7123b5ed-a6e0-45cf-a4d3-aca80d0d1171",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1984,
+        80
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "telegram-fbs-v2",
+        "options": {}
+      }
+    },
+    {
+      "id": "e139c344-f24d-41af-bb1a-be1c49d3cc1c",
+      "name": "Normalizar Payload Telegram",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1760,
+        80
+      ],
+      "parameters": {
+        "jsCode": "const body = $json.body || $json;\nconst message = body.message || body.edited_message || body.channel_post || {};\nconst from = message.from || {};\nconst chat = message.chat || {};\n\nconst chatId = chat.id ? String(chat.id) : '';\nconst text = (message.text || message.caption || '').trim();\nconst firstName = from.first_name || 'Prospecto';\nconst lastName = from.last_name || '';\nconst username = from.username || '';\nconst executionId = $execution.id || String(Date.now());\n\nif (!chatId || !text) {\n  return [];\n}\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    text,\n    first_name: firstName,\n    last_name: lastName,\n    username,\n    execution_id: executionId,\n    timestamp: Date.now()\n  }\n}];"
+      }
+    },
+    {
+      "id": "92826aed-0d6a-4d56-9978-0a535d5aab96",
+      "name": "Redis: Obtener Buffer Previo",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -1536,
+        80
+      ],
+      "parameters": {
+        "operation": "get",
+        "key": "=chat_buffer:{{ $json.chat_id }}",
+        "options": {}
+      },
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "FBS Redis Aislado"
+        }
+      }
+    },
+    {
+      "id": "2286a43d-00cb-4c07-8fde-9633c407564c",
+      "name": "Concatenar Ráfaga",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1328,
+        80
+      ],
+      "parameters": {
+        "jsCode": "const prev = $('Redis: Obtener Buffer Previo').first()?.json?.propertyName || $('Redis: Obtener Buffer Previo').first()?.json?.value || '';\nconst norm = $('Normalizar Payload Telegram').first()?.json || {};\nconst incomingText = String(norm.text || '');\nconst chatId = String(norm.chat_id || '');\nconst firstName = norm.first_name || 'Prospecto';\nconst lastName = norm.last_name || '';\nconst username = norm.username || '';\nconst executionId = norm.execution_id || String(Date.now());\n\nconst newBuffer = prev ? `${prev}\\n${incomingText}` : incomingText;\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    buffer: String(newBuffer || ''),\n    incoming_text: incomingText,\n    first_name: firstName,\n    last_name: lastName,\n    username: username,\n    execution_id: executionId\n  }\n}];"
+      }
+    },
+    {
+      "id": "b96e6d5c-62f4-47be-8947-b8f1c1685e36",
+      "name": "Redis: Guardar Buffer",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -1104,
+        80
+      ],
+      "parameters": {
+        "operation": "set",
+        "key": "=chat_buffer:{{ $json.chat_id }}",
+        "value": "={{ $json.buffer }}",
+        "keyType": "string"
+      },
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "FBS Redis Aislado"
+        }
+      }
+    },
+    {
+      "id": "d62c4ea4-36c2-447d-b6a9-01d47d8984e5",
+      "name": "Redis: Set Debounce Lock",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -880,
+        80
+      ],
+      "parameters": {
+        "operation": "set",
+        "key": "=chat_lock:{{ $('Concatenar Ráfaga').first().json.chat_id }}",
+        "value": "={{ $('Concatenar Ráfaga').first().json.execution_id }}",
+        "keyType": "string"
+      },
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "FBS Redis Aislado"
+        }
+      }
+    },
+    {
+      "id": "6151e0de-2ad4-4b7b-90b8-c3553a9bfd64",
+      "name": "Wait 8s (Ventana Silencio)",
+      "webhookId": "370125a5-2025-4dec-94cf-9541c5b30ed0",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        -656,
+        80
+      ],
+      "parameters": {
+        "amount": 8,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "cef2b018-25c6-4e7f-8df8-fa32d6737995",
+      "name": "Redis: Get Lock Tras Espera",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -448,
+        80
+      ],
+      "parameters": {
+        "operation": "get",
+        "key": "=chat_lock:{{ $('Concatenar Ráfaga').first().json.chat_id }}",
+        "options": {}
+      },
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "FBS Redis Aislado"
+        }
+      }
+    },
+    {
+      "id": "198dfcfc-2cfd-471e-b5e5-f28a2ab9a3ef",
+      "name": "¿Es el Último Mensaje de la Ráfaga?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        80
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-lock-check",
+              "leftValue": "={{ $json.propertyName || $json.value }}",
+              "rightValue": "={{ $('Concatenar Ráfaga').first().json.execution_id }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "8f9f805e-2d27-4645-baaf-097ce0fce708",
+      "name": "Redis: Recuperar Texto Completo",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "operation": "get",
+        "key": "=chat_buffer:{{ $('Concatenar Ráfaga').first().json.chat_id }}",
+        "options": {}
+      },
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "FBS Redis Aislado"
+        }
+      }
+    },
+    {
+      "id": "542b7cfe-5b04-45b4-9bfa-1ea9cf49a9b2",
+      "name": "Redis: Limpiar Buffer",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "operation": "delete",
+        "key": "=chat_buffer:{{ $('Concatenar Ráfaga').first().json.chat_id }}"
+      },
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "FBS Redis Aislado"
+        }
+      }
+    },
+    {
+      "id": "75270222-2245-41d2-b2f6-7307cc884c64",
+      "name": "Redis: Obtener Estado Comercial",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        448,
+        0
+      ],
+      "parameters": {
+        "operation": "get",
+        "key": "=lead:state:{{ $('Concatenar Ráfaga').first().json.chat_id }}",
+        "options": {}
+      },
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "FBS Redis Aislado"
+        }
+      }
+    },
+    {
+      "id": "bb0f2b04-6008-4ac0-81d1-340cf93756eb",
+      "name": "Preparar Contexto Comercial",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const completeText = $('Redis: Recuperar Texto Completo').first().json.propertyName || $('Redis: Recuperar Texto Completo').first().json.value || $('Concatenar Ráfaga').first().json.incoming_text;\nconst chatId = $('Concatenar Ráfaga').first().json.chat_id;\nconst firstName = $('Concatenar Ráfaga').first().json.first_name;\nconst lastName = $('Concatenar Ráfaga').first().json.last_name;\nconst username = $('Concatenar Ráfaga').first().json.username;\nconst rawState = $('Redis: Obtener Estado Comercial').first().json.propertyName || $('Redis: Obtener Estado Comercial').first().json.value || '';\nlet state = {};\ntry { state = rawState ? JSON.parse(rawState) : {}; } catch (e) { state = {}; }\nif (!state.version) state.version = 2;\nstate.chat_id = chatId;\nstate.contact = { first_name: state.contact?.first_name || firstName || 'Prospecto', last_name: state.contact?.last_name || lastName || '', email: state.contact?.email || '', phone: state.contact?.phone || '' };\nstate.metadata = { ...(state.metadata || {}), source: 'telegram', chat_id: chatId, username, updated_at: new Date().toISOString() };\nreturn [{json:{sessionId:chatId,chat_id:chatId,input:completeText,first_name:state.contact.first_name,last_name:state.contact.last_name,username,state}}];"
+      }
+    },
+    {
+      "id": "1c7467ac-92b2-4c33-88fe-d05d84891a82",
+      "name": "Window Buffer Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        1008,
+        288
+      ],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Preparar Contexto Comercial').first().json.chat_id }}",
+        "contextWindowLength": 20
+      }
+    },
+    {
+      "id": "534bd732-c92f-4a2a-973f-5c4faf44d9ce",
+      "name": "AI Agent FBS v2",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.input }}",
+        "options": {
+          "systemMessage": "Eres el Asesor Comercial de FBS Studio (fbs.studio), consultora boutique de branding y diseño estratégico en Chile. Conversas por Telegram con {{ $json.first_name || 'el cliente' }}.\n\nTU ROL\nNo eres un chatbot ni un formulario. Eres un asesor comercial consultivo: escuchas, entiendes el contexto y ayudas al prospecto a decidir si tiene sentido conversar con FBS Studio.\n\nOBJETIVO\nComprender qué está intentando resolver, detectar el servicio o necesidad, identificar motivación, decisor, horizonte y disposición de inversión cuando corresponda, y facilitar una videollamada estratégica gratuita de 30 minutos cuando exista suficiente contexto.\n\nESTADO COMERCIAL DISPONIBLE\nEl estado actual viene en $json.state. Úsalo como fuente de verdad comercial junto con la memoria conversacional. Nunca vuelvas a preguntar algo que ya esté suficientemente informado.\n\nPRINCIPIOS\n- La conversación debe sentirse humana y personalizada, nunca como un cuestionario.\n- Haz solo la pregunta que aporte más información para el siguiente paso.\n- Normalmente responde en 1-3 frases cortas. No fuerces una cantidad fija de palabras si eso perjudica la naturalidad.\n- Una pregunta principal por turno. Puedes confirmar o comentar antes de ella.\n- No des clases de branding ni explicaciones teóricas innecesarias.\n- Si el prospecto pregunta por un servicio, explícalo de forma breve y aterrizada a su caso.\n- No inventes datos, precios, clientes, capacidades ni resultados.\n- No repitas información que el prospecto ya entregó.\n\nINFORMACIÓN COMERCIAL\nLos proyectos de FBS Studio suelen partir desde $1.200.000 CLP. No ocultes este dato si corresponde o si te preguntan por precio. No lo repitas si ya fue presentado y respondido.\n\nSERVICIOS QUE PUEDEN APARECER\nBranding, rebranding, estrategia de marca, identidad visual, arquitectura de marca, naming y sistemas de identidad/diseño estratégico. Si la necesidad no encaja claramente, descríbela sin inventar un servicio.\n\nLÓGICA DE DECISIÓN\nPrioriza, según lo que falte y el contexto:\n1) entender necesidad/servicio;\n2) entender problema y resultado buscado;\n3) entender motivación o por qué ahora;\n4) identificar quién decide;\n5) hablar de inversión cuando sea oportuno;\n6) entender horizonte/urgencia;\n7) ofrecer la reunión cuando exista suficiente contexto e intención;\n8) pedir email y WhatsApp solo cuando la reunión tenga sentido;\n9) entregar el enlace de agenda cuando los datos estén disponibles.\nNo tienes que recorrer todos los pasos si el prospecto ya entregó esa información espontáneamente.\n\nREUNIÓN\nCuando corresponda, invita a una videollamada estratégica gratuita de 30 minutos. Enlace: https://cal.com/fbs-studio/consulta-30min?chat_id={{ $json.chat_id }}\n\nDATOS DE CONTACTO\nCuando el prospecto entregue email, teléfono/WhatsApp, nombre, empresa o cargo, reconócelos y continúa. No pidas nuevamente datos ya conocidos.\n\nOBJECCIONES\nSi no tiene presupuesto, no está seguro o necesita pensarlo, no presiones. Comprende la situación y, si corresponde, deja la puerta abierta o propone conversar cuando tenga sentido.\n\nTONO\nProfesional, cercano, seguro y natural en español de Chile. Sin lenguaje corporativo artificial, sin presión, sin exceso de emojis.\n\nRESULTADO ESPERADO\nEl prospecto debe sentir: “Entendieron lo que estoy tratando de resolver”, no “Estoy completando un formulario”.\n"
+        }
+      }
+    },
+    {
+      "id": "0b9480f1-1e4c-47dd-be7c-0f8ea886e1dc",
+      "name": "Preparar Extracción de Estado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const prep = $('Preparar Contexto Comercial').first().json;\nconst response = $('AI Agent FBS v2').first().json.output || '';\nreturn [{json:{chat_id:prep.chat_id,user_input:prep.input,assistant_response:response,previous_state:prep.state,first_name:prep.first_name,last_name:prep.last_name}}];"
+      }
+    },
+    {
+      "id": "2e711f6e-feba-44c0-8cec-e703758cccdc",
+      "name": "AI Agent - Extraer Estado Comercial",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        1328,
+        0
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ JSON.stringify($json) }}",
+        "options": {
+          "systemMessage": "Eres un extractor de estado comercial para FBS Studio. No conversas con el cliente. Devuelve EXCLUSIVAMENTE un objeto JSON válido, sin markdown, sin explicación y sin texto adicional.\n\nToma como entrada el estado anterior, el mensaje del prospecto y la respuesta del asesor. Actualiza SOLO información sustentada por la conversación. Nunca inventes.\n\nSchema exacto:\n{\n  \"contact\": {\"first_name\":\"\",\"last_name\":\"\",\"email\":\"\",\"phone\":\"\"},\n  \"company\": {\"name\":\"\",\"industry\":\"\",\"size\":\"\"},\n  \"commercial\": {\"service_needed\":\"\",\"business_problem\":\"\",\"desired_outcome\":\"\",\"decision_authority\":\"\",\"investment_readiness\":\"\",\"commitment_timeline\":\"\",\"intent\":\"unknown\"},\n  \"sales_process\": {\"lead_stage\":\"new\",\"budget_discussed\":false,\"meeting_offered\":false,\"meeting_accepted\":false,\"meeting_scheduled\":false,\"next_best_action\":\"understand_problem\"},\n  \"metadata\": {\"source\":\"telegram\"}\n}\n\nValores permitidos para intent: unknown, low, medium, high.\nValores permitidos para lead_stage: new, discovery, problem_identified, qualified, meeting_offered, contact_captured, scheduled, nurture, not_fit.\nValores permitidos para next_best_action: understand_problem, understand_motivation, identify_service, identify_decision_maker, discuss_investment, understand_timeline, offer_meeting, collect_email, collect_phone, send_calendar, nurture.\nConserva valores anteriores cuando la nueva conversación no los cambie. Si el prospecto no aporta un dato, déjalo vacío o conserva el anterior.\n"
+        }
+      }
+    },
+    {
+      "id": "290cb089-9d74-4321-8fbd-3d060673dde7",
+      "name": "Construir Estado Comercial",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const src = $('Preparar Extracción de Estado').first().json;\nlet extracted = {};\nconst raw = $('AI Agent - Extraer Estado Comercial').first().json.output || '';\ntry {\n  const clean = String(raw).replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/,'').trim();\n  extracted = JSON.parse(clean);\n} catch (e) { extracted = {}; }\nconst prev = src.previous_state || {};\nconst contact = {...(prev.contact||{}), ...(extracted.contact||{})};\nconst company = {...(prev.company||{}), ...(extracted.company||{})};\nconst commercial = {...(prev.commercial||{}), ...(extracted.commercial||{})};\nconst sales = {...(prev.sales_process||{}), ...(extracted.sales_process||{})};\nconst state = {version:2,chat_id:src.chat_id,contact,company,commercial,sales_process:sales,metadata:{...(prev.metadata||{}),...(extracted.metadata||{}),source:'telegram',chat_id:src.chat_id,updated_at:new Date().toISOString()}};\nreturn [{json:{...state,user_input:src.user_input,assistant_response:src.assistant_response,first_name:contact.first_name||src.first_name||'Prospecto'}}];"
+      }
+    },
+    {
+      "id": "f9476b10-6d38-4047-81c1-4e4fe5f5c24c",
+      "name": "Redis: Guardar Estado Comercial",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "operation": "set",
+        "key": "=lead:state:{{ $json.chat_id }}",
+        "value": "={{ JSON.stringify({version:$json.version,chat_id:$json.chat_id,contact:$json.contact,company:$json.company,commercial:$json.commercial,sales_process:$json.sales_process,metadata:$json.metadata}) }}",
+        "keyType": "string"
+      },
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "FBS Redis Aislado"
+        }
+      }
+    },
+    {
+      "id": "3e5890db-5a89-4734-b11a-f3e284331969",
+      "name": "Twenty CRM - Sync Determinístico",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const s = $('Construir Estado Comercial').first().json;\nconst c = s.contact || {}; const co = s.company || {}; const q = s.commercial || {}; const sp = s.sales_process || {};\nconst payload = {\n  first_name: c.first_name || '', last_name: c.last_name || '', email: c.email || '', phone: c.phone || '',\n  company_name: co.name || '', job_title: '', service_needed: q.service_needed || '', business_problem: q.business_problem || '',\n  desired_outcome: q.desired_outcome || '', decision_authority: q.decision_authority || '', investment_readiness: q.investment_readiness || '',\n  commitment_timeline: q.commitment_timeline || '', intent: q.intent || 'unknown', lead_stage: sp.lead_stage || 'new',\n  budget_discussed: !!sp.budget_discussed, meeting_offered: !!sp.meeting_offered, meeting_accepted: !!sp.meeting_accepted,\n  meeting_scheduled: !!sp.meeting_scheduled, next_best_action: sp.next_best_action || '', chat_id: s.chat_id\n};\nlet synced=false, error='';\nconst shouldSync = !!(c.email || c.phone || co.name || q.service_needed || q.business_problem || sp.meeting_offered);\nif (shouldSync) { try { await this.helpers.httpRequest({method:'POST',url:'http://twenty-bridge:3000/twenty/sync',body:payload,json:true}); synced=true; } catch(e){ error=e.message; } }\nreturn [{json:{chat_id:s.chat_id,bubbles_source:true,synced,error}}];"
+      }
+    },
+    {
+      "id": "7f22a03c-8655-4afe-95ab-e2d4076c0385",
+      "name": "Formatear Respuesta FBS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2208,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const rawOutput = ($('AI Agent FBS v2').first().json.output || '').trim();\nconst state = $('Construir Estado Comercial').first().json;\nconst chatId = state.chat_id;\nconst firstName = state.contact?.first_name || 'Prospecto';\nconst userInput = state.user_input || '';\nconst calLink = `https://cal.com/fbs-studio/consulta-30min?chat_id=${chatId}`;\nconst emailRegex = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})/i;\nconst phoneRegex = /(\\+?\\d[\\d\\s().-]{7,}\\d)/;\nconst emailMatch = userInput.match(emailRegex);\nconst phoneMatch = userInput.match(phoneRegex);\nlet finalText = rawOutput;\nif (!finalText || finalText.length < 5) {\n  if (state.contact?.email) finalText = `Perfecto, ${firstName}. Aquí puedes agendar la videollamada: ${calLink}`;\n  else finalText = `Entendido, ${firstName}. Cuéntame un poco más para orientarte mejor.`;\n}\nfinalText = finalText.replace(/`[^`]*(actualizar_calificacion_crm|sincronizar_twenty_crm)[^`]*`/gi,'').replace(/\\[RUN\\]/gi,'').trim();\nconst rawBubbles = finalText.split(/\\n\\s*\\n/).map(b=>b.trim()).filter(Boolean);\nconst bubbles=[];\nfor (const b of rawBubbles) {\n  if (b.length>220) { const parts=b.split(/(?<=[.?!])\\s+/); let cur=''; for(const s of parts){ if((cur+' '+s).trim().length>180&&cur){bubbles.push(cur.trim());cur=s;} else cur=cur?cur+' '+s:s;} if(cur)bubbles.push(cur.trim()); }\n  else bubbles.push(b);\n}\nreturn [{json:{chat_id:chatId,bubbles:bubbles.length?bubbles:[finalText],detected_email:emailMatch?.[1]||state.contact?.email||null,detected_phone:phoneMatch?.[1]||state.contact?.phone||null,first_name:firstName,user_input:userInput,lead_stage:state.sales_process?.lead_stage||'new'}}];"
+      }
+    },
+    {
+      "id": "789725e6-566f-4365-92af-8417a964fd97",
+      "name": "Redis: Registrar Actividad Lead",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        2432,
+        0
+      ],
+      "parameters": {
+        "operation": "set",
+        "key": "=lead:activity:{{ $json.chat_id }}",
+        "value": "={{ JSON.stringify($json) }}",
+        "keyType": "string"
+      },
+      "credentials": {
+        "redis": {
+          "id": "raEc5muJHVEYn2PV",
+          "name": "FBS Redis Aislado"
+        }
+      }
+    },
+    {
+      "id": "68ea29b1-0cbc-4a76-9f34-c41f2db7747f",
+      "name": "Telegram Send Multi Nativo v2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const chatId = $json.chat_id;\nconst bubbles = $json.bubbles || [];\n\nconst sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));\nconst sendResults = [];\n\nfor (let i = 0; i < bubbles.length; i++) {\n  const bubbleText = bubbles[i];\n  if (!bubbleText || bubbleText.trim().length === 0) continue;\n\n  // 1. Mostrar 'escribiendo...' en Telegram via Twenty Bridge\n  try {\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'http://twenty-bridge:3000/telegram/send',\n      body: {\n        chat_id: chatId,\n        action: 'typing'\n      },\n      json: true\n    });\n  } catch (e) {}\n\n  // 2. Pausa humana de 3.5 segundos (ritmo pausado y natural)\n  await sleep(1800);\n\n  // 3. Enviar burbuja de texto via Twenty Bridge\n  try {\n    const resData = await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'http://twenty-bridge:3000/telegram/send',\n      body: {\n        chat_id: chatId,\n        text: bubbleText,\n        parse_mode: 'HTML'\n      },\n      json: true\n    });\n    sendResults.push({ bubble_index: i, ok: resData?.ok, message_id: resData?.result?.message_id });\n  } catch (err) {\n    sendResults.push({ bubble_index: i, ok: false, error: err.message });\n  }\n}\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    bubbles_sent: sendResults.length,\n    results: sendResults\n  }\n}];"
+      }
+    },
+    {
+      "id": "c502f723-5928-44b8-ac3b-2f9cc5295a42",
+      "name": "DeepSeek Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [
+        768,
+        288
+      ],
+      "parameters": {
+        "model": "deepseek-flash",
+        "options": {}
+      },
+      "credentials": {
+        "deepSeekApi": {
+          "id": "jI9FUqWavKvF2Weg",
+          "name": "DeepSeek account"
+        }
+      }
+    },
+    {
+      "id": "e6117eec-a025-4e11-8e8e-2aed10f1cc75",
+      "name": "DeepSeek Chat Model - State",
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [
+        1312,
+        288
+      ],
+      "parameters": {
+        "model": "deepseek-flash",
+        "options": {}
+      },
+      "credentials": {
+        "deepSeekApi": {
+          "id": "jI9FUqWavKvF2Weg",
+          "name": "DeepSeek account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Telegram Ingress": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Payload Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar Payload Telegram": {
+      "main": [
+        [
+          {
+            "node": "Redis: Obtener Buffer Previo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Obtener Buffer Previo": {
+      "main": [
+        [
+          {
+            "node": "Concatenar Ráfaga",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Concatenar Ráfaga": {
+      "main": [
+        [
+          {
+            "node": "Redis: Guardar Buffer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Guardar Buffer": {
+      "main": [
+        [
+          {
+            "node": "Redis: Set Debounce Lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Set Debounce Lock": {
+      "main": [
+        [
+          {
+            "node": "Wait 8s (Ventana Silencio)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 8s (Ventana Silencio)": {
+      "main": [
+        [
+          {
+            "node": "Redis: Get Lock Tras Espera",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Get Lock Tras Espera": {
+      "main": [
+        [
+          {
+            "node": "¿Es el Último Mensaje de la Ráfaga?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es el Último Mensaje de la Ráfaga?": {
+      "main": [
+        [
+          {
+            "node": "Redis: Recuperar Texto Completo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Recuperar Texto Completo": {
+      "main": [
+        [
+          {
+            "node": "Redis: Limpiar Buffer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Limpiar Buffer": {
+      "main": [
+        [
+          {
+            "node": "Redis: Obtener Estado Comercial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Obtener Estado Comercial": {
+      "main": [
+        [
+          {
+            "node": "Preparar Contexto Comercial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Contexto Comercial": {
+      "main": [
+        [
+          {
+            "node": "AI Agent FBS v2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent FBS v2": {
+      "main": [
+        [
+          {
+            "node": "Preparar Extracción de Estado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Extracción de Estado": {
+      "main": [
+        [
+          {
+            "node": "AI Agent - Extraer Estado Comercial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent - Extraer Estado Comercial": {
+      "main": [
+        [
+          {
+            "node": "Construir Estado Comercial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Construir Estado Comercial": {
+      "main": [
+        [
+          {
+            "node": "Redis: Guardar Estado Comercial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Guardar Estado Comercial": {
+      "main": [
+        [
+          {
+            "node": "Twenty CRM - Sync Determinístico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Twenty CRM - Sync Determinístico": {
+      "main": [
+        [
+          {
+            "node": "Formatear Respuesta FBS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatear Respuesta FBS": {
+      "main": [
+        [
+          {
+            "node": "Redis: Registrar Actividad Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Registrar Actividad Lead": {
+      "main": [
+        [
+          {
+            "node": "Telegram Send Multi Nativo v2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Window Buffer Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent FBS v2",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent FBS v2",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek Chat Model - State": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent - Extraer Estado Comercial",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "nodeGroups": [],
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "staticData": null,
+  "pinData": {},
+  "meta": null,
+  "tags": [],
+  "shared": [
+    {
+      "role": "workflow:owner",
+      "workflowId": "jDdqrMXiJzKgsAE2",
+      "projectId": "lkGWYP7yRcqaEUIY",
+      "project": {
+        "id": "lkGWYP7yRcqaEUIY",
+        "name": "Richard Albornoz <richard.albornoz@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "0adac1b7-ef64-492b-909b-b795a9b653e9",
+        "createdAt": "2026-09-16T20:47:34.831Z",
+        "updatedAt": "2026-09-16T20:50:06.541Z"
+      },
+      "createdAt": "2026-09-25T00:46:02.343Z",
+      "updatedAt": "2026-09-25T00:46:02.343Z"
+    }
+  ],
+  "activeVersion": {
+    "versionId": "085ead52-6d45-4b3e-921b-b04daeba3f18",
+    "workflowId": "jDdqrMXiJzKgsAE2",
+    "nodes": [
+      {
+        "id": "6a08f499-abe8-4ed8-9d72-0dc212073ffb",
+        "name": "Webhook Telegram Ingress",
+        "webhookId": "7123b5ed-a6e0-45cf-a4d3-aca80d0d1171",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          -1984,
+          80
+        ],
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "telegram-fbs-v2",
+          "options": {}
+        }
+      },
+      {
+        "id": "e139c344-f24d-41af-bb1a-be1c49d3cc1c",
+        "name": "Normalizar Payload Telegram",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -1760,
+          80
+        ],
+        "parameters": {
+          "jsCode": "const body = $json.body || $json;\nconst message = body.message || body.edited_message || body.channel_post || {};\nconst from = message.from || {};\nconst chat = message.chat || {};\n\nconst chatId = chat.id ? String(chat.id) : '';\nconst text = (message.text || message.caption || '').trim();\nconst firstName = from.first_name || 'Prospecto';\nconst lastName = from.last_name || '';\nconst username = from.username || '';\nconst executionId = $execution.id || String(Date.now());\n\nif (!chatId || !text) {\n  return [];\n}\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    text,\n    first_name: firstName,\n    last_name: lastName,\n    username,\n    execution_id: executionId,\n    timestamp: Date.now()\n  }\n}];"
+        }
+      },
+      {
+        "id": "92826aed-0d6a-4d56-9978-0a535d5aab96",
+        "name": "Redis: Obtener Buffer Previo",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [
+          -1536,
+          80
+        ],
+        "parameters": {
+          "operation": "get",
+          "key": "=chat_buffer:{{ $json.chat_id }}",
+          "options": {}
+        },
+        "credentials": {
+          "redis": {
+            "id": "raEc5muJHVEYn2PV",
+            "name": "FBS Redis Aislado"
+          }
+        }
+      },
+      {
+        "id": "2286a43d-00cb-4c07-8fde-9633c407564c",
+        "name": "Concatenar Ráfaga",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -1328,
+          80
+        ],
+        "parameters": {
+          "jsCode": "const prev = $('Redis: Obtener Buffer Previo').first()?.json?.propertyName || $('Redis: Obtener Buffer Previo').first()?.json?.value || '';\nconst norm = $('Normalizar Payload Telegram').first()?.json || {};\nconst incomingText = String(norm.text || '');\nconst chatId = String(norm.chat_id || '');\nconst firstName = norm.first_name || 'Prospecto';\nconst lastName = norm.last_name || '';\nconst username = norm.username || '';\nconst executionId = norm.execution_id || String(Date.now());\n\nconst newBuffer = prev ? `${prev}\\n${incomingText}` : incomingText;\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    buffer: String(newBuffer || ''),\n    incoming_text: incomingText,\n    first_name: firstName,\n    last_name: lastName,\n    username: username,\n    execution_id: executionId\n  }\n}];"
+        }
+      },
+      {
+        "id": "b96e6d5c-62f4-47be-8947-b8f1c1685e36",
+        "name": "Redis: Guardar Buffer",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [
+          -1104,
+          80
+        ],
+        "parameters": {
+          "operation": "set",
+          "key": "=chat_buffer:{{ $json.chat_id }}",
+          "value": "={{ $json.buffer }}",
+          "keyType": "string"
+        },
+        "credentials": {
+          "redis": {
+            "id": "raEc5muJHVEYn2PV",
+            "name": "FBS Redis Aislado"
+          }
+        }
+      },
+      {
+        "id": "d62c4ea4-36c2-447d-b6a9-01d47d8984e5",
+        "name": "Redis: Set Debounce Lock",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [
+          -880,
+          80
+        ],
+        "parameters": {
+          "operation": "set",
+          "key": "=chat_lock:{{ $('Concatenar Ráfaga').first().json.chat_id }}",
+          "value": "={{ $('Concatenar Ráfaga').first().json.execution_id }}",
+          "keyType": "string"
+        },
+        "credentials": {
+          "redis": {
+            "id": "raEc5muJHVEYn2PV",
+            "name": "FBS Redis Aislado"
+          }
+        }
+      },
+      {
+        "id": "6151e0de-2ad4-4b7b-90b8-c3553a9bfd64",
+        "name": "Wait 8s (Ventana Silencio)",
+        "webhookId": "370125a5-2025-4dec-94cf-9541c5b30ed0",
+        "type": "n8n-nodes-base.wait",
+        "typeVersion": 1,
+        "position": [
+          -656,
+          80
+        ],
+        "parameters": {
+          "amount": 8,
+          "unit": "seconds"
+        }
+      },
+      {
+        "id": "cef2b018-25c6-4e7f-8df8-fa32d6737995",
+        "name": "Redis: Get Lock Tras Espera",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [
+          -448,
+          80
+        ],
+        "parameters": {
+          "operation": "get",
+          "key": "=chat_lock:{{ $('Concatenar Ráfaga').first().json.chat_id }}",
+          "options": {}
+        },
+        "credentials": {
+          "redis": {
+            "id": "raEc5muJHVEYn2PV",
+            "name": "FBS Redis Aislado"
+          }
+        }
+      },
+      {
+        "id": "198dfcfc-2cfd-471e-b5e5-f28a2ab9a3ef",
+        "name": "¿Es el Último Mensaje de la Ráfaga?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          -224,
+          80
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "cond-lock-check",
+                "leftValue": "={{ $json.propertyName || $json.value }}",
+                "rightValue": "={{ $('Concatenar Ráfaga').first().json.execution_id }}",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "8f9f805e-2d27-4645-baaf-097ce0fce708",
+        "name": "Redis: Recuperar Texto Completo",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [
+          0,
+          0
+        ],
+        "parameters": {
+          "operation": "get",
+          "key": "=chat_buffer:{{ $('Concatenar Ráfaga').first().json.chat_id }}",
+          "options": {}
+        },
+        "credentials": {
+          "redis": {
+            "id": "raEc5muJHVEYn2PV",
+            "name": "FBS Redis Aislado"
+          }
+        }
+      },
+      {
+        "id": "542b7cfe-5b04-45b4-9bfa-1ea9cf49a9b2",
+        "name": "Redis: Limpiar Buffer",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [
+          224,
+          0
+        ],
+        "parameters": {
+          "operation": "delete",
+          "key": "=chat_buffer:{{ $('Concatenar Ráfaga').first().json.chat_id }}"
+        },
+        "credentials": {
+          "redis": {
+            "id": "raEc5muJHVEYn2PV",
+            "name": "FBS Redis Aislado"
+          }
+        }
+      },
+      {
+        "id": "75270222-2245-41d2-b2f6-7307cc884c64",
+        "name": "Redis: Obtener Estado Comercial",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [
+          448,
+          0
+        ],
+        "parameters": {
+          "operation": "get",
+          "key": "=lead:state:{{ $('Concatenar Ráfaga').first().json.chat_id }}",
+          "options": {}
+        },
+        "credentials": {
+          "redis": {
+            "id": "raEc5muJHVEYn2PV",
+            "name": "FBS Redis Aislado"
+          }
+        }
+      },
+      {
+        "id": "bb0f2b04-6008-4ac0-81d1-340cf93756eb",
+        "name": "Preparar Contexto Comercial",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          672,
+          0
+        ],
+        "parameters": {
+          "jsCode": "const completeText = $('Redis: Recuperar Texto Completo').first().json.propertyName || $('Redis: Recuperar Texto Completo').first().json.value || $('Concatenar Ráfaga').first().json.incoming_text;\nconst chatId = $('Concatenar Ráfaga').first().json.chat_id;\nconst firstName = $('Concatenar Ráfaga').first().json.first_name;\nconst lastName = $('Concatenar Ráfaga').first().json.last_name;\nconst username = $('Concatenar Ráfaga').first().json.username;\nconst rawState = $('Redis: Obtener Estado Comercial').first().json.propertyName || $('Redis: Obtener Estado Comercial').first().json.value || '';\nlet state = {};\ntry { state = rawState ? JSON.parse(rawState) : {}; } catch (e) { state = {}; }\nif (!state.version) state.version = 2;\nstate.chat_id = chatId;\nstate.contact = { first_name: state.contact?.first_name || firstName || 'Prospecto', last_name: state.contact?.last_name || lastName || '', email: state.contact?.email || '', phone: state.contact?.phone || '' };\nstate.metadata = { ...(state.metadata || {}), source: 'telegram', chat_id: chatId, username, updated_at: new Date().toISOString() };\nreturn [{json:{sessionId:chatId,chat_id:chatId,input:completeText,first_name:state.contact.first_name,last_name:state.contact.last_name,username,state}}];"
+        }
+      },
+      {
+        "id": "1c7467ac-92b2-4c33-88fe-d05d84891a82",
+        "name": "Window Buffer Memory",
+        "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+        "typeVersion": 1.3,
+        "position": [
+          1008,
+          288
+        ],
+        "parameters": {
+          "sessionIdType": "customKey",
+          "sessionKey": "={{ $('Preparar Contexto Comercial').first().json.chat_id }}",
+          "contextWindowLength": 20
+        }
+      },
+      {
+        "id": "534bd732-c92f-4a2a-973f-5c4faf44d9ce",
+        "name": "AI Agent FBS v2",
+        "type": "@n8n/n8n-nodes-langchain.agent",
+        "typeVersion": 1.7,
+        "position": [
+          880,
+          0
+        ],
+        "parameters": {
+          "promptType": "define",
+          "text": "={{ $json.input }}",
+          "options": {
+            "systemMessage": "Eres el Asesor Comercial de FBS Studio (fbs.studio), consultora boutique de branding y diseño estratégico en Chile. Conversas por Telegram con {{ $json.first_name || 'el cliente' }}.\n\nTU ROL\nNo eres un chatbot ni un formulario. Eres un asesor comercial consultivo: escuchas, entiendes el contexto y ayudas al prospecto a decidir si tiene sentido conversar con FBS Studio.\n\nOBJETIVO\nComprender qué está intentando resolver, detectar el servicio o necesidad, identificar motivación, decisor, horizonte y disposición de inversión cuando corresponda, y facilitar una videollamada estratégica gratuita de 30 minutos cuando exista suficiente contexto.\n\nESTADO COMERCIAL DISPONIBLE\nEl estado actual viene en $json.state. Úsalo como fuente de verdad comercial junto con la memoria conversacional. Nunca vuelvas a preguntar algo que ya esté suficientemente informado.\n\nPRINCIPIOS\n- La conversación debe sentirse humana y personalizada, nunca como un cuestionario.\n- Haz solo la pregunta que aporte más información para el siguiente paso.\n- Normalmente responde en 1-3 frases cortas. No fuerces una cantidad fija de palabras si eso perjudica la naturalidad.\n- Una pregunta principal por turno. Puedes confirmar o comentar antes de ella.\n- No des clases de branding ni explicaciones teóricas innecesarias.\n- Si el prospecto pregunta por un servicio, explícalo de forma breve y aterrizada a su caso.\n- No inventes datos, precios, clientes, capacidades ni resultados.\n- No repitas información que el prospecto ya entregó.\n\nINFORMACIÓN COMERCIAL\nLos proyectos de FBS Studio suelen partir desde $1.200.000 CLP. No ocultes este dato si corresponde o si te preguntan por precio. No lo repitas si ya fue presentado y respondido.\n\nSERVICIOS QUE PUEDEN APARECER\nBranding, rebranding, estrategia de marca, identidad visual, arquitectura de marca, naming y sistemas de identidad/diseño estratégico. Si la necesidad no encaja claramente, descríbela sin inventar un servicio.\n\nLÓGICA DE DECISIÓN\nPrioriza, según lo que falte y el contexto:\n1) entender necesidad/servicio;\n2) entender problema y resultado buscado;\n3) entender motivación o por qué ahora;\n4) identificar quién decide;\n5) hablar de inversión cuando sea oportuno;\n6) entender horizonte/urgencia;\n7) ofrecer la reunión cuando exista suficiente contexto e intención;\n8) pedir email y WhatsApp solo cuando la reunión tenga sentido;\n9) entregar el enlace de agenda cuando los datos estén disponibles.\nNo tienes que recorrer todos los pasos si el prospecto ya entregó esa información espontáneamente.\n\nREUNIÓN\nCuando corresponda, invita a una videollamada estratégica gratuita de 30 minutos. Enlace: https://cal.com/fbs-studio/consulta-30min?chat_id={{ $json.chat_id }}\n\nDATOS DE CONTACTO\nCuando el prospecto entregue email, teléfono/WhatsApp, nombre, empresa o cargo, reconócelos y continúa. No pidas nuevamente datos ya conocidos.\n\nOBJECCIONES\nSi no tiene presupuesto, no está seguro o necesita pensarlo, no presiones. Comprende la situación y, si corresponde, deja la puerta abierta o propone conversar cuando tenga sentido.\n\nTONO\nProfesional, cercano, seguro y natural en español de Chile. Sin lenguaje corporativo artificial, sin presión, sin exceso de emojis.\n\nRESULTADO ESPERADO\nEl prospecto debe sentir: “Entendieron lo que estoy tratando de resolver”, no “Estoy completando un formulario”.\n"
+          }
+        }
+      },
+      {
+        "id": "0b9480f1-1e4c-47dd-be7c-0f8ea886e1dc",
+        "name": "Preparar Extracción de Estado",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1104,
+          0
+        ],
+        "parameters": {
+          "jsCode": "const prep = $('Preparar Contexto Comercial').first().json;\nconst response = $('AI Agent FBS v2').first().json.output || '';\nreturn [{json:{chat_id:prep.chat_id,user_input:prep.input,assistant_response:response,previous_state:prep.state,first_name:prep.first_name,last_name:prep.last_name}}];"
+        }
+      },
+      {
+        "id": "2e711f6e-feba-44c0-8cec-e703758cccdc",
+        "name": "AI Agent - Extraer Estado Comercial",
+        "type": "@n8n/n8n-nodes-langchain.agent",
+        "typeVersion": 1.7,
+        "position": [
+          1328,
+          0
+        ],
+        "parameters": {
+          "promptType": "define",
+          "text": "={{ JSON.stringify($json) }}",
+          "options": {
+            "systemMessage": "Eres un extractor de estado comercial para FBS Studio. No conversas con el cliente. Devuelve EXCLUSIVAMENTE un objeto JSON válido, sin markdown, sin explicación y sin texto adicional.\n\nToma como entrada el estado anterior, el mensaje del prospecto y la respuesta del asesor. Actualiza SOLO información sustentada por la conversación. Nunca inventes.\n\nSchema exacto:\n{\n  \"contact\": {\"first_name\":\"\",\"last_name\":\"\",\"email\":\"\",\"phone\":\"\"},\n  \"company\": {\"name\":\"\",\"industry\":\"\",\"size\":\"\"},\n  \"commercial\": {\"service_needed\":\"\",\"business_problem\":\"\",\"desired_outcome\":\"\",\"decision_authority\":\"\",\"investment_readiness\":\"\",\"commitment_timeline\":\"\",\"intent\":\"unknown\"},\n  \"sales_process\": {\"lead_stage\":\"new\",\"budget_discussed\":false,\"meeting_offered\":false,\"meeting_accepted\":false,\"meeting_scheduled\":false,\"next_best_action\":\"understand_problem\"},\n  \"metadata\": {\"source\":\"telegram\"}\n}\n\nValores permitidos para intent: unknown, low, medium, high.\nValores permitidos para lead_stage: new, discovery, problem_identified, qualified, meeting_offered, contact_captured, scheduled, nurture, not_fit.\nValores permitidos para next_best_action: understand_problem, understand_motivation, identify_service, identify_decision_maker, discuss_investment, understand_timeline, offer_meeting, collect_email, collect_phone, send_calendar, nurture.\nConserva valores anteriores cuando la nueva conversación no los cambie. Si el prospecto no aporta un dato, déjalo vacío o conserva el anterior.\n"
+          }
+        }
+      },
+      {
+        "id": "290cb089-9d74-4321-8fbd-3d060673dde7",
+        "name": "Construir Estado Comercial",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1552,
+          0
+        ],
+        "parameters": {
+          "jsCode": "const src = $('Preparar Extracción de Estado').first().json;\nlet extracted = {};\nconst raw = $('AI Agent - Extraer Estado Comercial').first().json.output || '';\ntry {\n  const clean = String(raw).replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/,'').trim();\n  extracted = JSON.parse(clean);\n} catch (e) { extracted = {}; }\nconst prev = src.previous_state || {};\nconst contact = {...(prev.contact||{}), ...(extracted.contact||{})};\nconst company = {...(prev.company||{}), ...(extracted.company||{})};\nconst commercial = {...(prev.commercial||{}), ...(extracted.commercial||{})};\nconst sales = {...(prev.sales_process||{}), ...(extracted.sales_process||{})};\nconst state = {version:2,chat_id:src.chat_id,contact,company,commercial,sales_process:sales,metadata:{...(prev.metadata||{}),...(extracted.metadata||{}),source:'telegram',chat_id:src.chat_id,updated_at:new Date().toISOString()}};\nreturn [{json:{...state,user_input:src.user_input,assistant_response:src.assistant_response,first_name:contact.first_name||src.first_name||'Prospecto'}}];"
+        }
+      },
+      {
+        "id": "f9476b10-6d38-4047-81c1-4e4fe5f5c24c",
+        "name": "Redis: Guardar Estado Comercial",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [
+          1760,
+          0
+        ],
+        "parameters": {
+          "operation": "set",
+          "key": "=lead:state:{{ $json.chat_id }}",
+          "value": "={{ JSON.stringify({version:$json.version,chat_id:$json.chat_id,contact:$json.contact,company:$json.company,commercial:$json.commercial,sales_process:$json.sales_process,metadata:$json.metadata}) }}",
+          "keyType": "string"
+        },
+        "credentials": {
+          "redis": {
+            "id": "raEc5muJHVEYn2PV",
+            "name": "FBS Redis Aislado"
+          }
+        }
+      },
+      {
+        "id": "3e5890db-5a89-4734-b11a-f3e284331969",
+        "name": "Twenty CRM - Sync Determinístico",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1984,
+          0
+        ],
+        "parameters": {
+          "jsCode": "const s = $('Construir Estado Comercial').first().json;\nconst c = s.contact || {}; const co = s.company || {}; const q = s.commercial || {}; const sp = s.sales_process || {};\nconst payload = {\n  first_name: c.first_name || '', last_name: c.last_name || '', email: c.email || '', phone: c.phone || '',\n  company_name: co.name || '', job_title: '', service_needed: q.service_needed || '', business_problem: q.business_problem || '',\n  desired_outcome: q.desired_outcome || '', decision_authority: q.decision_authority || '', investment_readiness: q.investment_readiness || '',\n  commitment_timeline: q.commitment_timeline || '', intent: q.intent || 'unknown', lead_stage: sp.lead_stage || 'new',\n  budget_discussed: !!sp.budget_discussed, meeting_offered: !!sp.meeting_offered, meeting_accepted: !!sp.meeting_accepted,\n  meeting_scheduled: !!sp.meeting_scheduled, next_best_action: sp.next_best_action || '', chat_id: s.chat_id\n};\nlet synced=false, error='';\nconst shouldSync = !!(c.email || c.phone || co.name || q.service_needed || q.business_problem || sp.meeting_offered);\nif (shouldSync) { try { await this.helpers.httpRequest({method:'POST',url:'http://twenty-bridge:3000/twenty/sync',body:payload,json:true}); synced=true; } catch(e){ error=e.message; } }\nreturn [{json:{chat_id:s.chat_id,bubbles_source:true,synced,error}}];"
+        }
+      },
+      {
+        "id": "7f22a03c-8655-4afe-95ab-e2d4076c0385",
+        "name": "Formatear Respuesta FBS",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2208,
+          0
+        ],
+        "parameters": {
+          "jsCode": "const rawOutput = ($('AI Agent FBS v2').first().json.output || '').trim();\nconst state = $('Construir Estado Comercial').first().json;\nconst chatId = state.chat_id;\nconst firstName = state.contact?.first_name || 'Prospecto';\nconst userInput = state.user_input || '';\nconst calLink = `https://cal.com/fbs-studio/consulta-30min?chat_id=${chatId}`;\nconst emailRegex = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})/i;\nconst phoneRegex = /(\\+?\\d[\\d\\s().-]{7,}\\d)/;\nconst emailMatch = userInput.match(emailRegex);\nconst phoneMatch = userInput.match(phoneRegex);\nlet finalText = rawOutput;\nif (!finalText || finalText.length < 5) {\n  if (state.contact?.email) finalText = `Perfecto, ${firstName}. Aquí puedes agendar la videollamada: ${calLink}`;\n  else finalText = `Entendido, ${firstName}. Cuéntame un poco más para orientarte mejor.`;\n}\nfinalText = finalText.replace(/`[^`]*(actualizar_calificacion_crm|sincronizar_twenty_crm)[^`]*`/gi,'').replace(/\\[RUN\\]/gi,'').trim();\nconst rawBubbles = finalText.split(/\\n\\s*\\n/).map(b=>b.trim()).filter(Boolean);\nconst bubbles=[];\nfor (const b of rawBubbles) {\n  if (b.length>220) { const parts=b.split(/(?<=[.?!])\\s+/); let cur=''; for(const s of parts){ if((cur+' '+s).trim().length>180&&cur){bubbles.push(cur.trim());cur=s;} else cur=cur?cur+' '+s:s;} if(cur)bubbles.push(cur.trim()); }\n  else bubbles.push(b);\n}\nreturn [{json:{chat_id:chatId,bubbles:bubbles.length?bubbles:[finalText],detected_email:emailMatch?.[1]||state.contact?.email||null,detected_phone:phoneMatch?.[1]||state.contact?.phone||null,first_name:firstName,user_input:userInput,lead_stage:state.sales_process?.lead_stage||'new'}}];"
+        }
+      },
+      {
+        "id": "789725e6-566f-4365-92af-8417a964fd97",
+        "name": "Redis: Registrar Actividad Lead",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [
+          2432,
+          0
+        ],
+        "parameters": {
+          "operation": "set",
+          "key": "=lead:activity:{{ $json.chat_id }}",
+          "value": "={{ JSON.stringify($json) }}",
+          "keyType": "string"
+        },
+        "credentials": {
+          "redis": {
+            "id": "raEc5muJHVEYn2PV",
+            "name": "FBS Redis Aislado"
+          }
+        }
+      },
+      {
+        "id": "68ea29b1-0cbc-4a76-9f34-c41f2db7747f",
+        "name": "Telegram Send Multi Nativo v2",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2640,
+          0
+        ],
+        "parameters": {
+          "jsCode": "const chatId = $json.chat_id;\nconst bubbles = $json.bubbles || [];\n\nconst sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));\nconst sendResults = [];\n\nfor (let i = 0; i < bubbles.length; i++) {\n  const bubbleText = bubbles[i];\n  if (!bubbleText || bubbleText.trim().length === 0) continue;\n\n  // 1. Mostrar 'escribiendo...' en Telegram via Twenty Bridge\n  try {\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'http://twenty-bridge:3000/telegram/send',\n      body: {\n        chat_id: chatId,\n        action: 'typing'\n      },\n      json: true\n    });\n  } catch (e) {}\n\n  // 2. Pausa humana de 3.5 segundos (ritmo pausado y natural)\n  await sleep(1800);\n\n  // 3. Enviar burbuja de texto via Twenty Bridge\n  try {\n    const resData = await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'http://twenty-bridge:3000/telegram/send',\n      body: {\n        chat_id: chatId,\n        text: bubbleText,\n        parse_mode: 'HTML'\n      },\n      json: true\n    });\n    sendResults.push({ bubble_index: i, ok: resData?.ok, message_id: resData?.result?.message_id });\n  } catch (err) {\n    sendResults.push({ bubble_index: i, ok: false, error: err.message });\n  }\n}\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    bubbles_sent: sendResults.length,\n    results: sendResults\n  }\n}];"
+        }
+      },
+      {
+        "id": "c502f723-5928-44b8-ac3b-2f9cc5295a42",
+        "name": "DeepSeek Chat Model",
+        "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+        "typeVersion": 1,
+        "position": [
+          768,
+          288
+        ],
+        "parameters": {
+          "model": "deepseek-flash",
+          "options": {}
+        },
+        "credentials": {
+          "deepSeekApi": {
+            "id": "jI9FUqWavKvF2Weg",
+            "name": "DeepSeek account"
+          }
+        }
+      },
+      {
+        "id": "e6117eec-a025-4e11-8e8e-2aed10f1cc75",
+        "name": "DeepSeek Chat Model - State",
+        "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+        "typeVersion": 1,
+        "position": [
+          1312,
+          288
+        ],
+        "parameters": {
+          "model": "deepseek-flash",
+          "options": {}
+        },
+        "credentials": {
+          "deepSeekApi": {
+            "id": "jI9FUqWavKvF2Weg",
+            "name": "DeepSeek account"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "Webhook Telegram Ingress": {
+        "main": [
+          [
+            {
+              "node": "Normalizar Payload Telegram",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Normalizar Payload Telegram": {
+        "main": [
+          [
+            {
+              "node": "Redis: Obtener Buffer Previo",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Redis: Obtener Buffer Previo": {
+        "main": [
+          [
+            {
+              "node": "Concatenar Ráfaga",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Concatenar Ráfaga": {
+        "main": [
+          [
+            {
+              "node": "Redis: Guardar Buffer",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Redis: Guardar Buffer": {
+        "main": [
+          [
+            {
+              "node": "Redis: Set Debounce Lock",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Redis: Set Debounce Lock": {
+        "main": [
+          [
+            {
+              "node": "Wait 8s (Ventana Silencio)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Wait 8s (Ventana Silencio)": {
+        "main": [
+          [
+            {
+              "node": "Redis: Get Lock Tras Espera",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Redis: Get Lock Tras Espera": {
+        "main": [
+          [
+            {
+              "node": "¿Es el Último Mensaje de la Ráfaga?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "¿Es el Último Mensaje de la Ráfaga?": {
+        "main": [
+          [
+            {
+              "node": "Redis: Recuperar Texto Completo",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Redis: Recuperar Texto Completo": {
+        "main": [
+          [
+            {
+              "node": "Redis: Limpiar Buffer",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Redis: Limpiar Buffer": {
+        "main": [
+          [
+            {
+              "node": "Redis: Obtener Estado Comercial",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Redis: Obtener Estado Comercial": {
+        "main": [
+          [
+            {
+              "node": "Preparar Contexto Comercial",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Preparar Contexto Comercial": {
+        "main": [
+          [
+            {
+              "node": "AI Agent FBS v2",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "AI Agent FBS v2": {
+        "main": [
+          [
+            {
+              "node": "Preparar Extracción de Estado",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Preparar Extracción de Estado": {
+        "main": [
+          [
+            {
+              "node": "AI Agent - Extraer Estado Comercial",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "AI Agent - Extraer Estado Comercial": {
+        "main": [
+          [
+            {
+              "node": "Construir Estado Comercial",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Construir Estado Comercial": {
+        "main": [
+          [
+            {
+              "node": "Redis: Guardar Estado Comercial",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Redis: Guardar Estado Comercial": {
+        "main": [
+          [
+            {
+              "node": "Twenty CRM - Sync Determinístico",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Twenty CRM - Sync Determinístico": {
+        "main": [
+          [
+            {
+              "node": "Formatear Respuesta FBS",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Formatear Respuesta FBS": {
+        "main": [
+          [
+            {
+              "node": "Redis: Registrar Actividad Lead",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Redis: Registrar Actividad Lead": {
+        "main": [
+          [
+            {
+              "node": "Telegram Send Multi Nativo v2",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Window Buffer Memory": {
+        "ai_memory": [
+          [
+            {
+              "node": "AI Agent FBS v2",
+              "type": "ai_memory",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "DeepSeek Chat Model": {
+        "ai_languageModel": [
+          [
+            {
+              "node": "AI Agent FBS v2",
+              "type": "ai_languageModel",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "DeepSeek Chat Model - State": {
+        "ai_languageModel": [
+          [
+            {
+              "node": "AI Agent - Extraer Estado Comercial",
+              "type": "ai_languageModel",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Richard Albornoz",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "createdAt": "2026-09-25T01:09:05.580Z",
+    "updatedAt": "2026-09-25T01:09:05.580Z",
+    "workflowPublishHistory": [
+      {
+        "id": 265,
+        "workflowId": "jDdqrMXiJzKgsAE2",
+        "versionId": "085ead52-6d45-4b3e-921b-b04daeba3f18",
+        "event": "activated",
+        "userId": "0adac1b7-ef64-492b-909b-b795a9b653e9",
+        "createdAt": "2026-09-25T01:09:06.894Z"
+      }
+    ]
+  }
+}
